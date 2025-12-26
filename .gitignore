@@ -1,0 +1,10 @@
+photos/
+.env
+.db/
+db/chroma/
+__pycache__/
+debug_crops/
+generated_latest.png
+face_landmarker.task
+*.ipynb
+.idea/
