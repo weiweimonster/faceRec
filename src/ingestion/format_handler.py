@@ -54,7 +54,12 @@ def ensure_display_version(file_path: str, cache_dir: str, quality: int = 80) ->
         try:
             # Perform conversion
             img = Image.open(file_path)
-            img.convert("RGB").save(cached_path, "JPEG", quality=quality)
+            exif_data = img.info.get("exif")
+            rgb_img = img.convert("RGB")
+            if exif_data:
+                rgb_img.save(cached_path, "JPEG", quality=quality, exif=exif_data)
+            else:
+                rgb_img.save(cached_path, "JPEG", quality=quality)
             return cached_path
         except Exception as e:
             print(f"❌ Failed to convert HEIC {file_path}: {e}")

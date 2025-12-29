@@ -15,7 +15,7 @@ DB_CHROMA_PATH = "./db/chroma"
 
 def run_ingestion() -> None:
     """
-    Scans the raw_phatos directory, processes iimage with AI models
+    Scans the raw_photos directory, processes image with AI models
     and saves the embeddings in the database.
     """
 

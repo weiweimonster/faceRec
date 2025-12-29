@@ -82,6 +82,14 @@ class DatabaseManager:
                 embedding_blob BLOB,
                 bounding_box TEXT, -- JSON [x, y, w, h]
                 confidence REAL,
+                pose TEXT,
+                shot_type TEXT,
+                blur_score REAL,
+                brightness REAL,
+                face_height REAL,
+                yaw REAL,
+                pitch REAL,
+                roll REAL,
                 FOREIGN KEY(photo_id) REFERENCES photos(photo_id) ON DELETE CASCADE
             )
         """)
@@ -120,10 +128,10 @@ class DatabaseManager:
             # 1. Insert Photo Record
             # UPDATED: Now includes 'file_hash'
             self.cursor.execute("""
-                        INSERT INTO photos (photo_id, original_path, display_path, file_hash, width, height)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        INSERT INTO photos (photo_id, original_path, display_path, file_hash, width, height, timestamp)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                         """, (photo_id, original_path, display_path, file_hash, result.original_width,
-                              result.original_height))
+                              result.original_height, result.timestamp))
 
             # 2. Insert Face Records
             for face in result.faces:
@@ -135,12 +143,20 @@ class DatabaseManager:
                 # Ensure bbox is JSON serializable
                 bbox_json = json.dumps(face.bbox)
 
-                self.cursor.execute("""
-                        INSERT INTO photo_faces (photo_id, person_id, embedding_blob, bounding_box, confidence)
-                        VALUES (?, -1, ?, ?, ?)
-                        """, (photo_id, emb_bytes, bbox_json, face.confidence))
+                shot_type = face.shot_type if face.shot_type else "Unknown"
+                blur_score = face.blur_score if face.blur_score else 0.0
+                brightness = face.brightness if face.brightness else 0.0
+                yaw = face.yaw if face.yaw else 0.0
+                pitch = face.pitch if face.pitch else 0.0
+                roll = face.roll if face.roll else 0.0
+                pose = str(face.pose) if face.pose else "Unknown"
 
-            self.conn.commit()
+                self.cursor.execute(
+                    """INSERT INTO photo_faces (photo_id, person_id, embedding_blob, bounding_box, confidence,
+                        shot_type, blur_score, brightness, yaw, pitch, roll, pose)
+                        VALUES (?, -1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (photo_id, emb_bytes, bbox_json, face.confidence, shot_type, blur_score,
+                              brightness, yaw, pitch, roll, pose))
 
             # --- Step B: Insert into ChromaDB (Vector Store) ---
 
@@ -154,6 +170,8 @@ class DatabaseManager:
                 embeddings=[result.semantic_vector.tolist()],  # Chroma expects list
                 metadatas=[metadata]
             )
+
+            self.conn.commit()
 
             return photo_id
 
