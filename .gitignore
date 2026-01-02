@@ -1,7 +1,7 @@
 photos/
 .env
 .db/
-db/chroma/
+db/
 __pycache__/
 debug_crops/
 generated_latest.png*
