@@ -10,6 +10,7 @@ from src.pose.pose import Pose
 from src.util.image_util import is_face_too_small, calculate_face_quality, calculate_shot_type, get_exif_timestamp
 from src.common.types import FaceData, ImageAnalysisResult
 from src.util.logger import logger
+from src.model.aesthetic_predictor import AestheticPredictor
 
 class FeatureExtractor:
     """
@@ -24,8 +25,13 @@ class FeatureExtractor:
 
         self.clip_mode, self.clip_preprocess = clip.load("ViT-L/14", device=self.device)
         self.pose_extractor = PoseExtractor(gpu=use_gpu)
+        self.aesthetic_predictor = AestheticPredictor(
+            input_size=768,
+            model_path="sac_logos_ava1-l14-linearMSE.pth",
+            device=self.device,
+        )
 
-    def process_image(self, image_path: str) -> ImageAnalysisResult:
+    def process_image(self, image_path: str, raw_path: str) -> ImageAnalysisResult:
         try:
             cv_img = cv2.imread(image_path)
             if cv_img is None:
@@ -75,10 +81,25 @@ class FeatureExtractor:
                 image_features = self.clip_mode.encode_image(clip_input)
                 image_features /= image_features.norm(dim=-1, keepdim=True)
                 semantic_vector = image_features.cpu().numpy()[0]
+
+                # Calculate aesthetic score
+                aesthetic_score = self.aesthetic_predictor(image_features.to(self.device)).item()
+
+
             timestamp = get_exif_timestamp(image_path)
             if not timestamp:
+                # TODO: re-sync the photos with last modified data preserved, so we can fall back to system time
                 logger.debug(f"No timestamp found for {image_path}")
-            return ImageAnalysisResult(semantic_vector, preprocess_faces, w, h, timestamp)
+            return ImageAnalysisResult(
+                original_path=raw_path,
+                photo_id=None, # Used in ranker later, for the purpose of ingestion, we don't need it
+                display_path=image_path,
+                semantic_vector=semantic_vector,
+                original_width=w,
+                original_height=h,
+                aesthetic_score=aesthetic_score,
+                faces=kept_raw_faces,
+            )
         except Exception as e:
             raise e
 

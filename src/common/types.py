@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 import numpy as np
 from src.pose.pose import Pose
 
@@ -24,10 +24,17 @@ class ImageAnalysisResult:
     """
     The complete AI analysis of a photo
     """
-    # The output of CLIP model for semantic embedding
-    semantic_vector: np.ndarray
-    # The detected faces in the image
-    faces: List[FaceData]
-    original_width: int
-    original_height: int
-    timestamp: str
+    # Essential keys (always loaded)
+    original_path: Optional[str]
+    photo_id: Optional[str]
+    display_path: Optional[str]
+
+    # Lazy fields (None until hydrated)
+    timestamp: Optional[str] = None
+    semantic_vector: Optional[np.ndarray] = None
+    original_width: Optional[int] = None
+    original_height: Optional[int] = None
+    aesthetic_score: Optional[float] = None
+
+    # Complex nested data
+    faces: Optional[List[FaceData]] = None

@@ -52,7 +52,7 @@ def run_ingestion() -> None:
             display_path = ensure_display_version(raw_path, CACHE_DIR)
 
             # Extract Features
-            result = engine.process_image(display_path)
+            result = engine.process_image(display_path, raw_path)
 
             if result:
                 # Save to DB

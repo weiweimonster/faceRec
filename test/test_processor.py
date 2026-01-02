@@ -18,6 +18,7 @@ def mock_dependencies():
         patch('src.ingestion.processor.PoseExtractor') as mock_pose_extractor, \
         patch('src.ingestion.processor.cv2') as mock_cv2, \
         patch('src.ingestion.processor.torch') as mock_torch, \
+        patch('src.ingestion.processor.AestheticPredictor') as mock_aesthetic_cls, \
         patch('src.util.image_util.is_face_too_small') as mock_too_small:
         # Setup FaceAnalysis mock
         instance_fa = mock_fa.return_value
@@ -30,6 +31,11 @@ def mock_dependencies():
 
         # Setup Torch mock for device check
         mock_torch.cuda.is_available.return_value = False
+
+        mock_torch.load.return_value = {}
+        mock_aesthetic_instance = mock_aesthetic_cls.return_value
+
+        mock_aesthetic_instance.return_value.item.return_value = 7.5
 
         # Setup generic response for is_face_too_small (default to False/Keep face)
         mock_too_small.return_value = False
@@ -60,7 +66,9 @@ def mock_face_obj():
     face = MagicMock()
     face.bbox = np.array([10, 10, 50, 50], dtype=np.float32) # x1, y1, x2, y2
     face.embedding = np.random.rand(512)
-    face.det_score = 0.99
+    face.confidence = 0.99
+    face.yaw = 10.0
+    face.pitch = 20.0
     return face
 
 def test_initialization(mock_dependencies):
@@ -76,7 +84,7 @@ def test_process_image_file_not_found(extractor, mock_dependencies):
     """Test handling of invalid image paths."""
     mock_dependencies["cv2"].imread.return_value = None
 
-    result = extractor.process_image("non_existent.jpg")
+    result = extractor.process_image("non_existent.jpg", "non_existent_raw.heic")
     assert result is None
 
 
@@ -102,13 +110,15 @@ def test_process_image_happy_path(extractor, mock_dependencies, sample_image, mo
     mock_dependencies["clip_model"].encode_image.return_value = mock_tensor
 
     # Run
-    result = extractor.process_image("test.jpg")
+    result = extractor.process_image("test.jpg", "test_raw.jpg")
 
     # Assertions
     assert isinstance(result, ImageAnalysisResult)
     assert len(result.faces) == 1
     assert result.original_width == 100
     assert result.original_height == 100
+    assert result.aesthetic_score == 7.5
+    assert result.original_path == "test_raw.jpg"
 
     # Check Face Data
     face = result.faces[0]
@@ -148,7 +158,7 @@ def test_filter_small_faces(extractor, mock_dependencies, sample_image, mock_fac
     mock_tensor.cpu().numpy.return_value = np.zeros((1, 512))
     mock_dependencies["clip_model"].encode_image.return_value = mock_tensor
 
-    result = extractor.process_image("test.jpg")
+    result = extractor.process_image("test.jpg", "test_raw.jpg")
 
     # We should only have 1 face remaining
     assert len(result.faces) == 1
@@ -204,7 +214,7 @@ def test_error_propagation(extractor, mock_dependencies):
     mock_dependencies["cv2"].imread.side_effect = Exception("Disk Error")
 
     with pytest.raises(Exception) as excinfo:
-        extractor.process_image("broken.jpg")
+        extractor.process_image("broken.jpg", "broken_raw.jpg")
 
     assert "Disk Error" in str(excinfo.value)
 
@@ -230,12 +240,15 @@ def test_process_image_returns_valid_dataclass(extractor, mock_dependencies, sam
     mock_dependencies["pose"].return_value.extract_pose_from_faces.return_value = [(10.0, 20.0, 5.0)]
 
     # Mock cv2.imread s we don't need a real image
-    result = extractor.process_image("fake_path.jpg")
+    result = extractor.process_image("fake_path.jpg", "fake_raw_path.jpg")
 
     assert isinstance(result, ImageAnalysisResult)
     assert len(result.faces) == 1
     assert result.original_width == 100
     assert result.original_height == 100
+    assert result.original_path == "fake_raw_path.jpg"
+    assert result.display_path == "fake_path.jpg"
+    assert result.aesthetic_score == 7.5
 
     # Check Faces
     face = result.faces[0]
