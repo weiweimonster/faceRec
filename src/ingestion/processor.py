@@ -83,13 +83,17 @@ class FeatureExtractor:
                 semantic_vector = image_features.cpu().numpy()[0]
 
                 # Calculate aesthetic score
-                aesthetic_score = self.aesthetic_predictor(image_features.to(self.device)).item()
+                # Note: CLIP uses Half Prevision, and AestheticPredictor use Full floating point precision
+                # TODO: Write test cases to ensure that the data types are matching
+                aesthetic_score = self.aesthetic_predictor(image_features.to(self.device).float()).item()
 
 
             timestamp = get_exif_timestamp(image_path)
             if not timestamp:
                 # TODO: re-sync the photos with last modified data preserved, so we can fall back to system time
                 logger.debug(f"No timestamp found for {image_path}")
+
+            # TODO: Write a test cases to ensure that we are using preprocess_faces, and not kept_raw_faces
             return ImageAnalysisResult(
                 original_path=raw_path,
                 photo_id=None, # Used in ranker later, for the purpose of ingestion, we don't need it
@@ -98,7 +102,7 @@ class FeatureExtractor:
                 original_width=w,
                 original_height=h,
                 aesthetic_score=aesthetic_score,
-                faces=kept_raw_faces,
+                faces=preprocess_faces,
             )
         except Exception as e:
             raise e

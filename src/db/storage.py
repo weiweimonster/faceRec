@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Optional, Any, Dict
+from src.util.logger import logger
 
 # Import the data structures (ensure these exist in your src/ingestion/processor.py)
 from src.ingestion.processor import ImageAnalysisResult
@@ -59,6 +60,7 @@ class DatabaseManager:
                 timestamp DATETIME,
                 width INTEGER,
                 height INTEGER,
+                aesthetic_score REAL,
                 meta_tags TEXT -- JSON list of auto-generated tags
             )
         """)
@@ -126,12 +128,11 @@ class DatabaseManager:
             # --- Step A: Insert into SQLite ---
 
             # 1. Insert Photo Record
-            # UPDATED: Now includes 'file_hash'
             self.cursor.execute("""
-                        INSERT INTO photos (photo_id, original_path, display_path, file_hash, width, height, timestamp)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO photos (photo_id, original_path, display_path, file_hash, width, height, timestamp, aesthetic_score)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """, (photo_id, original_path, display_path, file_hash, result.original_width,
-                              result.original_height, result.timestamp))
+                              result.original_height, result.timestamp, result.aesthetic_score))
 
             # 2. Insert Face Records
             for face in result.faces:
@@ -177,7 +178,7 @@ class DatabaseManager:
 
         except Exception as e:
             self.conn.rollback()
-            print(f"❌ Database Transaction Failed for {original_path}: {e}")
+            logger.error(f"❌ Database Transaction Failed for {original_path}: {e}")
             raise e
 
     def get_person_name(self, person_id: int) -> str:

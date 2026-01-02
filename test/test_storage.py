@@ -4,6 +4,7 @@ import sqlite3
 import json
 from src.db.storage import DatabaseManager
 from src.common.types import ImageAnalysisResult, FaceData
+from src.pose.pose import Pose
 from unittest.mock import MagicMock, patch
 
 
@@ -32,7 +33,16 @@ def db_manager(tmp_path, mock_chroma):
 @pytest.fixture
 def sample_result():
     return ImageAnalysisResult(
+        # Essential keys
+        photo_id=None,
+        original_path="/orig/a.jpg",
+        display_path="/disp/a.jpg",
         semantic_vector=np.random.rand(512).astype(np.float32),
+        # Metadata
+        original_width=1920,
+        original_height=1080,
+        timestamp="2025-01-01 10:00:00",
+        aesthetic_score=7.5,  # NEW FIELD
         faces=[
             FaceData(
                 bbox=[100, 100, 200, 200],
@@ -41,14 +51,12 @@ def sample_result():
                 shot_type="Medium-Shot",
                 blur_score=0.5,
                 brightness=100.0,
-                yaw=0.0,
-                pitch=0.0,
-                roll=0.0
+                yaw=10.5,   # NEW FIELD
+                pitch=-5.2, # NEW FIELD
+                roll=1.1,   # NEW FIELD
+                pose=Pose.FRONT
             )
-        ],
-        original_width=1920,
-        original_height=1080,
-        timestamp="2025-01-01 10:00:00"
+        ]
     )
 
 
@@ -70,24 +78,41 @@ def test_save_result_inserts_data(db_manager, mock_chroma, sample_result):
     assert isinstance(pid, str)
     assert len(pid) > 0
 
-    # 1. Verify Photo Record
+    # 1. Verify Photo Record including aesthetic_score
+    db_manager.cursor.execute("SELECT aesthetic_score, width, height FROM photos WHERE photo_id=?", (pid,))
+    row = db_manager.cursor.fetchone()
+    assert row[0] == 7.5
+    assert row[1] == 1920
+
+    # 2. Verify Face Record including Pose and Shot Type
+    db_manager.cursor.execute("""
+                              SELECT shot_type, yaw, pitch, roll, pose
+                              FROM photo_faces WHERE photo_id=?
+                              """, (pid,))
+    face_row = db_manager.cursor.fetchone()
+    assert face_row[0] == "Medium-Shot"
+    assert face_row[1] == 10.5
+    assert face_row[2] == -5.2
+    assert face_row[4] == "Front"
+
+    # 3. Verify Photo Record
     db_manager.cursor.execute("SELECT * from photos WHERE photo_id=?", (pid,))
     photo_row = db_manager.cursor.fetchone()
     assert photo_row is not None
     assert photo_row[1] == "/orig/a.jpg"  # original_path
 
-    # Verify the hash was stored (assuming it's column index 3 or by name)
+    # 4. Verify the hash was stored (assuming it's column index 3 or by name)
     db_manager.cursor.execute("SELECT file_hash FROM photos WHERE photo_id=?", (pid,))
     assert db_manager.cursor.fetchone()[0] == "dummy_hash_1"
 
-    # 2. Verify Face Record
+    # 5. Verify Face Record
     db_manager.cursor.execute("SELECT * from photo_faces WHERE photo_id=?", (pid,))
     face_row = db_manager.cursor.fetchone()
     assert face_row is not None
     assert face_row[2] == -1  # person_id default
     assert isinstance(face_row[3], bytes)  # embedding blob
 
-    # 3. Verify Chroma Vector
+    # 6. Verify Chroma Vector
     mock_chroma["collection"].add.assert_called_once()
     call_args = mock_chroma["collection"].add.call_args[1]
 
