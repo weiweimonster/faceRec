@@ -5,14 +5,15 @@ from datetime import datetime
 import json
 from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
+from src.util.logger import logger
 import os
 
 def is_face_too_small(
-    bbox: Tuple[int, int, int, int],
-    image_width: int,
-    image_height: int,
-    min_side_px: int = 32,
-    min_area_ratio: float = 0.001,
+        bbox: Tuple[int, int, int, int],
+        image_width: int,
+        image_height: int,
+        min_side_px: int = 32,
+        min_area_ratio: float = 0.001,
 ):
     x1, y1, x2, y2 = bbox
     w = max(0, x2 - x1)
@@ -133,7 +134,7 @@ def get_timestamp_from_heic(heic_path: str) -> str | None:
     img = Image.open(heic_path)
     exif = img.getexif()
     if 36867 in exif:
-         return exif[36867]
+        return exif[36867]
     elif 306 in exif:
         return exif[306]
 
@@ -145,9 +146,9 @@ def plot_image_from_path(path: str, title: str = None, figsize: tuple = (15, 15)
     try:
         register_heif_opener()
     except ImportError:
-        print("⚠️ pillow-heif not installed. HEIC files will fail.")
+        logger.error("⚠️ pillow-heif not installed. HEIC files will fail.")
     if not os.path.exists(path):
-        print(f"❌ File not found: {path}")
+        logger.error(f"❌ File not found: {path}")
         return
 
     try:
@@ -171,5 +172,33 @@ def plot_image_from_path(path: str, title: str = None, figsize: tuple = (15, 15)
         plt.show()
 
     except Exception as e:
-        print(f"❌ Error plotting image: {e}")
+        logger.error(f"❌ Error plotting image: {e}")
+
+
+def load_face_crop(image_path: str, bbox_str):
+    bbox = json.loads(bbox_str)
+    x1, y1, x2, y2 = [int(b) for b in bbox]
+
+    img = Image.open(image_path)
+    width, height = img.size
+
+    # Add 40% Padding so we get the hair/chin/neck (better for generation)
+    pad_x = int((x2 - x1) * 0.4)
+    pad_y = int((y2 - y1) * 0.4)
+
+    crop_x1 = max(0, x1 - pad_x)
+    crop_y1 = max(0, y1 - pad_y)
+    crop_x2 = min(width, x2 + pad_x)
+    crop_y2 = min(height, y2 + pad_y)
+
+    cropped_face = img.crop((crop_x1, crop_y1, crop_x2, crop_y2))
+    return cropped_face
+
+def calculate_face_dim(bbox_str) -> Tuple[float, float]:
+    try:
+        bbox = json.loads(bbox_str)
+        x1, y1, x2, y2 = [int(b) for b in bbox]
+        return abs(x2 - x1), abs(y2 - y1)
+    except:
+        return 0.0, 0.0
 
