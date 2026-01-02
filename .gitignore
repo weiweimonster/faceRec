@@ -4,7 +4,12 @@ photos/
 db/chroma/
 __pycache__/
 debug_crops/
-generated_latest.png
+generated_latest.png*
 face_landmarker.task
 *.ipynb
 .idea/
+third_party/
+sac_logos_ava1-l14-linearMSE.pth
+delete_notebooks/
+src/debug/
+logs/
