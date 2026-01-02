@@ -1,12 +1,14 @@
 from torch import nn
 from typing import Optional
 import torch
+from src.util.logger import logger
 
 class AestheticPredictor(nn.Module):
     def __init__(self, input_size, device: str = None, model_path: Optional[str] = None):
         super().__init__()
         self.input_size = input_size
         self.device = device if device is not None else 'cuda' if torch.cuda.is_available() else 'cpu'
+        logger.info(f"Using device {self.device} for aesthetic predictor model")
         self.layers = nn.Sequential(
             nn.Linear(self.input_size, 1024),
             nn.Dropout(0.2),
@@ -18,8 +20,11 @@ class AestheticPredictor(nn.Module):
             nn.Linear(16, 1),
         )
 
+        self.to(self.device)
+
         if model_path:
             self._load_weights(model_path)
+
 
     def _load_weights(self, model_path: str):
         state_dict = torch.load(model_path, weights_only=True, map_location=self.device)
@@ -27,6 +32,7 @@ class AestheticPredictor(nn.Module):
         self.eval()
 
     def forward(self, x):
+        x = x.to(self.device)
         return self.layers(x)
 
 
