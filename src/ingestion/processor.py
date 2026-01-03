@@ -94,6 +94,7 @@ class FeatureExtractor:
                 logger.debug(f"No timestamp found for {image_path}")
 
             # TODO: Write a test cases to ensure that we are using preprocess_faces, and not kept_raw_faces
+            # TODO: Write a test cases to ensure that we are saving timestamp
             return ImageAnalysisResult(
                 original_path=raw_path,
                 photo_id=None, # Used in ranker later, for the purpose of ingestion, we don't need it
@@ -103,6 +104,7 @@ class FeatureExtractor:
                 original_height=h,
                 aesthetic_score=aesthetic_score,
                 faces=preprocess_faces,
+                timestamp=timestamp,
             )
         except Exception as e:
             raise e

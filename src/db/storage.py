@@ -5,14 +5,11 @@ import chromadb
 import numpy as np
 import uuid
 import json
-import os
 from pathlib import Path
-from dataclasses import dataclass
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Any, Dict, Tuple
 from src.util.logger import logger
-
-# Import the data structures (ensure these exist in your src/ingestion/processor.py)
-from src.ingestion.processor import ImageAnalysisResult
+from src.ingestion.processor import FaceData, ImageAnalysisResult
+from src.util.search_config import SearchFilters
 
 
 class DatabaseManager:
@@ -28,7 +25,8 @@ class DatabaseManager:
         Path(chroma_path).mkdir(parents=True, exist_ok=True)
 
         # 1. Setup SQLite
-        self.conn = sqlite3.connect(sql_path)
+        # Use False for streamlit multithread
+        self.conn = sqlite3.connect(sql_path, check_same_thread=False)
         self.cursor = self.conn.cursor()
         self._init_sql_tables()
 
@@ -199,3 +197,257 @@ class DatabaseManager:
     def close(self):
         self.conn.close()
         # Chroma client handles its own cleanup typically
+
+    def get_candidate_path(self, filters: SearchFilters) -> List[str]:
+        params = []
+
+        # Determine base query based on search mode
+        if filters.is_person_search:
+            logger.info("Mode: Person Search")
+            query = """
+                    SELECT DISTINCT ph.display_path
+                    FROM photo_faces pf
+                             JOIN photos ph ON pf.photo_id = ph.photo_id
+                             LEFT JOIN people p ON pf.person_id = p.person_id
+                    WHERE 1 = 1 \
+                    """
+        else:
+            logger.info("Mode: Scene Search (Targeting all photos)")
+            query = "SELECT display_path FROM photos WHERE 1=1"
+
+        if filters.pose:
+            logger.info(f"Pose Filter added to SQL Query: {str(filters.pose)}")
+            query += " AND pf.pose LIKE ?"
+            params.append(str(filters.pose))
+
+        if filters.year:
+            logger.info(f"Year Filter added to SQL Query: {str(filters.year)}")
+            # Handle different table aliases for year filtering
+            prefix = "ph." if filters.is_person_search else ""
+            query += f" AND strftime('%Y', {prefix}timestamp) = ?"
+            params.append(str(filters.year))
+
+        if filters.people:
+            logger.info("People filter detected, parsing names.....")
+            name_conditions = ["p.name LIKE ?" for _ in filters.people]
+            for name in filters.people:
+                logger.info(f"    Adding {name} to SQL Query")
+                params.append(f"%{name}%")
+
+            query += " AND (" + " OR ".join(name_conditions) + ")"
+            query += " GROUP BY ph.photo_id HAVING COUNT(DISTINCT p.name) >= ?"
+            params.append(len(filters.people))
+
+        try:
+            logger.info(f"Query: {str(query)} with Params: {str(params)}")
+            self.cursor.execute(query, tuple(params))
+            return [row[0] for row in self.cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"SQL Candidate Search Error: {e}")
+            return []
+
+    def get_semantic_candidates(self, query_vector: List[float], allowed_paths: List[str], limit: int) -> Dict[str, float]:
+        # Note: Directly taking query_vector to prevent loading heavy model like CLIP
+        logger.info("Performing Vector Search with Chroma")
+
+        search_params = {
+            "query_embeddings": [query_vector],
+            "n_results": limit,
+            "include": ["metadatas", "distances", "embeddings"]
+        }
+
+        if allowed_paths:
+            search_params["where"] = {"path": {"$in": allowed_paths}}
+
+        try:
+            results = self.vector_collection.query(**search_params)
+            # Dict: Path -> Semantic Score
+            output = {}
+            if results['metadatas']:
+                metas = results['metadatas'][0]
+                dists = results['distances'][0]
+                vecs = results['embeddings'][0]
+
+                for i, meta in enumerate(metas):
+                    path = meta.get('path')
+
+                    # Convert Distance to Similarity (1 - distance)
+                    sim = max(0.0, 1.0 - dists[i])
+
+                    # Convert List -> Numpy Array (Float32 is standard for Torch)
+                    vector = np.array(vecs[i], dtype=np.float32)
+
+                    output[path] = (sim, vector)
+            return output
+        except Exception as e:
+            logger.error(f"Chroma Search Error: {e}")
+            return {}
+
+    def fetch_metadata_batch(self, paths: List[str], fields: str | List[str] = "all") -> List[ImageAnalysisResult]:
+        """
+        Fetches metadata for a list of photos and hydrates them into ImageAnalysisResult objects.
+
+        Args:
+            paths: List of display_paths to fetch.
+            fields: A list of specific metadata keys or "all" to fetch everything.
+        """
+        if not paths:
+            return []
+
+        # 1. Map requested fields to their actual SQL columns
+        valid_map = {
+            "timestamp": "ph.timestamp",
+            "yaw": "pf.yaw",
+            "pitch": "pf.pitch",
+            "roll": "pf.roll",
+            "bbox": "pf.bounding_box",
+            "confidence": "pf.confidence",
+            "pose": "pf.pose",
+            "blur": "pf.blur_score",
+            "brightness": "pf.brightness",
+            "face_height": "pf.face_height",
+            "shot_type": "pf.shot_type",
+            "embedding": "pf.embedding_blob",
+            "name": "p.name",
+            "original_path": "ph.original_path",
+            "photo_id": "ph.photo_id",
+            "aesthetic_score": "ph.aesthetic_score",
+            "width": "ph.width",
+            "height": "ph.height"
+        }
+
+        # Handle the "all" logic
+        target_fields = list(valid_map.keys()) if fields == "all" else fields
+        if not isinstance(target_fields, list):
+            target_fields = [target_fields]
+
+        # 2. Build Query
+        base_cols = ["ph.display_path", "ph.photo_id"]
+        requested_sql_cols = [valid_map[f] for f in target_fields if f in valid_map]
+
+        # Deduplicate columns and create string
+        cols_str = ", ".join(list(dict.fromkeys(base_cols + requested_sql_cols)))
+        placeholders = ",".join(["?"] * len(paths))
+
+        query = f"""
+            SELECT {cols_str} FROM photos ph
+            LEFT JOIN photo_faces pf ON ph.photo_id = pf.photo_id
+            LEFT JOIN people p ON pf.person_id = p.person_id
+            WHERE ph.display_path IN ({placeholders})
+        """
+
+        logger.info(f"Executing query: {str(query)} to fetch metadata for {len(paths)}")
+        self.cursor.execute(query, paths)
+        rows = self.cursor.fetchall()
+        logger.info(f"Fetched {len(rows)} from database")
+
+        # 3. Process Rows into Objects
+        results_map: Dict[str, ImageAnalysisResult] = {}
+        col_names = [d[0] for d in self.cursor.description]
+
+        logger.info(f"Debug: cols names: {col_names}")
+
+        # if rows and len(rows) > 0:
+            # TODO: Remove this after debugging
+            # logger.info(f"Debug: first row of metadata fetching: {rows[0]}")
+
+        for i, row in enumerate(rows):
+            row_dict = dict(zip(col_names, row))
+            p_id = row_dict['photo_id']
+
+            # Initialize the ImageAnalysisResult if not already in map
+            if p_id not in results_map:
+                results_map[p_id] = ImageAnalysisResult(
+                    photo_id=p_id,
+                    display_path=row_dict['display_path'],
+                    original_path=row_dict.get('original_path'),
+                    timestamp=row_dict.get('timestamp'),
+                    aesthetic_score=row_dict.get('aesthetic_score'),
+                    original_width=row_dict.get('width'),
+                    original_height=row_dict.get('height'),
+                    faces=[]
+                )
+
+            # 4. Extract Face Data (only if confidence exists, meaning a face was joined)
+            if row_dict.get('confidence') is not None:
+                embedding = None
+                if 'embedding_blob' in row_dict and row_dict['embedding_blob']:
+                    embedding = np.frombuffer(row_dict['embedding_blob'], dtype=np.float32)
+
+                face = FaceData(
+                    # If we haven't labeled it, then name field will be NULL'
+                    # TODO: Figure out a better way to handle this gracefully
+                    name=row_dict.get('name', 'Unknown') or 'Unknown', # Added name back in
+                    bbox=json.loads(row_dict['bounding_box']) if row_dict.get('bounding_box') else None,
+                    confidence=row_dict['confidence'],
+                    yaw=row_dict.get('yaw', -1.0),
+                    pitch=row_dict.get('pitch', -1.0),
+                    roll=row_dict.get('roll', -1.0),
+                    shot_type=row_dict.get('shot_type'),
+                    blur_score=row_dict.get('blur_score'), # Fixed key to match valid_map
+                    brightness=row_dict.get('brightness'),
+                    pose=row_dict.get('pose'),
+                    embedding=embedding,
+                )
+
+                # TODO: Delete this debugging statement
+                # logger.info(f"populating face with {face.name}")
+
+                results_map[p_id].faces.append(face)
+
+        return list(results_map.values())
+
+    def get_people_clusters(self) -> List[Dict[str, Any]]:
+        """
+        Returns a list of people for the sidebar: (person_id, name, display_path, bbox_json)
+        """
+        query = """
+                SELECT p.person_id, p.name, ph.display_path, pf.bounding_box
+                FROM people p
+                         JOIN photo_faces pf ON p.representative_face_id = pf.id
+                         JOIN photos ph ON pf.photo_id = ph.photo_id
+                ORDER BY p.person_id ASC \
+                """
+        try:
+            self.cursor.execute(query)
+            rows = self.cursor.fetchall()
+
+            # Convert raw tuples to friendly dictionaries
+            clusters = []
+            for r in rows:
+                clusters.append({
+                    "id": r[0],
+                    "name": r[1],
+                    "face_path": r[2],
+                    "bbox": r[3]
+                })
+            return clusters
+        except Exception as e:
+            logger.error(f"Failed to fetch clusters: {e}")
+            return []
+
+
+    def merge_identity(self, old_pid: int, new_name: str) -> str:
+        """
+        Renames a person. If 'new_name' already exists, merges the old ID into the new ID.
+        Returns a status message for the UI.
+        """
+        new_name = new_name.strip()
+
+        # 1. Check if the target name already exists
+        self.cursor.execute("SELECT person_id FROM people WHERE name = ? AND person_id != ?", (new_name, old_pid))
+        row = self.cursor.fetchone()
+
+        if row:
+            # MERGE: Target exists, move all faces to target and delete old person
+            target_pid = row[0]
+            self.cursor.execute("UPDATE photo_faces SET person_id = ? WHERE person_id = ?", (target_pid, old_pid))
+            self.cursor.execute("DELETE FROM people WHERE person_id = ?", (old_pid,))
+            self.conn.commit()
+            return f"Merged 'ID {old_pid}' into existing '{new_name}' (ID {target_pid})."
+        else:
+            # RENAME: Just update the name
+            self.cursor.execute("UPDATE people SET name = ? WHERE person_id = ?", (new_name, old_pid))
+            self.conn.commit()
+            return f"Renamed ID {old_pid} to {new_name}"
+

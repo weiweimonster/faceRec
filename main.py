@@ -6,7 +6,7 @@ from src.db.storage import DatabaseManager
 from src.ingestion.processor import FeatureExtractor
 from src.ingestion.format_handler import ensure_display_version
 from src.clustering.service import ClusteringService
-from src.utils import calculate_image_hash
+from src.util.image_util import calculate_image_hash
 from src.util.logger import logger
 
 RAW_PHOTOS_DIR = "./photos"

@@ -7,6 +7,8 @@ from src.common.types import ImageAnalysisResult, FaceData
 from src.pose.pose import Pose
 from unittest.mock import MagicMock, patch
 
+from src.util.search_config import SearchFilters
+
 
 @pytest.fixture
 def mock_chroma():
@@ -59,6 +61,17 @@ def sample_result():
         ]
     )
 
+@pytest.fixture
+def mock_filters():
+    """Creates a mock SearchFilters object with default behaviors."""
+    filters = MagicMock()
+    filters.fn_name = "search"
+    filters.is_person_search = False
+    filters.people = []
+    filters.year = None
+    filters.pose = None
+    filters.semantic_query = None
+    return filters
 
 def test_init_creates_tables(db_manager):
     """
@@ -200,3 +213,61 @@ def test_person_management(db_manager):
     # Update the name (Upsert logic)
     db_manager.update_person_name(99, "Alice Cooper")
     assert db_manager.get_person_name(99) == "Alice Cooper"
+
+def test_get_candidate_path_scene_mode(db_manager, mock_filters):
+    """Verify simple SELECT when not in person search mode."""
+    db_manager.cursor.execute("INSERT INTO photos (photo_id, display_path) VALUES ('1', 'd/1.jpg')")
+
+    mock_filters.is_person_search = False
+    paths = db_manager.get_candidate_path(mock_filters)
+
+    assert paths == ["d/1.jpg"]
+
+def test_get_candidate_path_person_intersection(db_manager, mock_filters):
+    """Verify the GROUP BY / HAVING logic for multiple people."""
+    # Setup: 1 photo with 2 people
+    db_manager.cursor.execute("INSERT INTO photos (photo_id, display_path) VALUES ('p1', 'path/1.jpg')")
+    db_manager.cursor.execute("INSERT INTO people (person_id, name) VALUES (1, 'Alice'), (2, 'Bob')")
+    db_manager.cursor.execute("INSERT INTO photo_faces (photo_id, person_id, confidence) VALUES ('p1', 1, 0.9), ('p1', 2, 0.9)")
+    db_manager.conn.commit()
+
+    mock_filters.is_person_search = True
+    mock_filters.people = ["Alice", "Bob"]
+
+    paths = db_manager.get_candidate_path(mock_filters)
+    assert len(paths) == 1
+    assert paths[0] == "path/1.jpg"
+
+def test_fetch_metadata_batch_hydration_logic(db_manager, sample_result):
+    """Verify that 'all' correctly maps DB rows to ImageAnalysisResult objects."""
+    # Ingest a real sample
+    db_manager.save_result(sample_result, "orig/1.jpg", "disp/1.jpg", "hash1")
+
+    # Run hydration
+    results = db_manager.fetch_metadata_batch(["disp/1.jpg"], fields="all")
+
+    assert len(results) == 1
+    res = results[0]
+    assert isinstance(res, ImageAnalysisResult)
+    assert res.aesthetic_score == sample_result.aesthetic_score
+    assert len(res.faces) == 1
+    assert res.faces[0].yaw == sample_result.faces[0].yaw
+
+def test_fetch_metadata_batch_invalid_path(db_manager):
+    """Ensure querying non-existent paths returns an empty list safely."""
+    results = db_manager.fetch_metadata_batch(["non_existent.jpg"], fields="all")
+    assert results == []
+
+def test_get_semantic_candidates_math(db_manager, mock_chroma):
+    """Verify distance to similarity conversion logic."""
+    # Mock ChromaDB response
+    mock_chroma["collection"].query.return_value = {
+        'metadatas': [[{'path': 'a.jpg'}, {'path': 'b.jpg'}]],
+        'distances': [[0.1, 1.9]] # 0.1 is very similar, 1.9 is opposite
+    }
+
+    dummy_vec = [0.0] * 512
+    scores = db_manager.get_semantic_candidates(dummy_vec, allowed_paths=[], limit=2)
+
+    assert scores["a.jpg"] == pytest.approx(0.9) # 1.0 - 0.1
+    assert scores["b.jpg"] == pytest.approx(0.0) # max(0, 1.0 - 1.9)

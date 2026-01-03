@@ -134,8 +134,10 @@ def get_timestamp_from_heic(heic_path: str) -> str | None:
     img = Image.open(heic_path)
     exif = img.getexif()
     if 36867 in exif:
+        print("Got timestamp from 36867")
         return exif[36867]
     elif 306 in exif:
+        print("Got timestamp from 306")
         return exif[306]
 
     return None
@@ -175,9 +177,8 @@ def plot_image_from_path(path: str, title: str = None, figsize: tuple = (15, 15)
         logger.error(f"❌ Error plotting image: {e}")
 
 
-def load_face_crop(image_path: str, bbox_str):
-    bbox = json.loads(bbox_str)
-    x1, y1, x2, y2 = [int(b) for b in bbox]
+def load_face_crop(image_path: str, bbox: List[int]):
+    x1, y1, x2, y2 = bbox
 
     img = Image.open(image_path)
     width, height = img.size
@@ -194,11 +195,30 @@ def load_face_crop(image_path: str, bbox_str):
     cropped_face = img.crop((crop_x1, crop_y1, crop_x2, crop_y2))
     return cropped_face
 
-def calculate_face_dim(bbox_str) -> Tuple[float, float]:
+def calculate_face_dim(bbox: List[int]) -> Tuple[float, float]:
     try:
-        bbox = json.loads(bbox_str)
-        x1, y1, x2, y2 = [int(b) for b in bbox]
+        x1, y1, x2, y2 = bbox
         return abs(x2 - x1), abs(y2 - y1)
     except:
         return 0.0, 0.0
+
+def str_to_bbox(bbox_str: str) -> List[int]:
+    bbox = json.loads(bbox_str)
+    return [int(b) for b in bbox]
+
+def load_face_crop_from_str(image_path: str, bbox_str: str):
+    bbox = str_to_bbox(bbox_str)
+    return load_face_crop(image_path, bbox)
+
+import hashlib
+
+def calculate_image_hash(file_path: str) -> str:
+    """
+    Calculates SHA-256 hash of a file
+    """
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
 

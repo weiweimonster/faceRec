@@ -18,6 +18,7 @@ class FaceData:
     pitch: float = -1.0
     roll: float = -1.0
     pose: Pose = None
+    name: Optional[str] = None
 
 @dataclass
 class ImageAnalysisResult:
