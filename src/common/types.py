@@ -36,6 +36,10 @@ class ImageAnalysisResult:
     original_width: Optional[int] = None
     original_height: Optional[int] = None
     aesthetic_score: Optional[float] = None
+    iso: Optional[int] = None
+    global_blur: float = 0.0
+    global_brightness: float = 0.0
+    global_contrast: float = 0.0
 
     # Complex nested data
     faces: Optional[List[FaceData]] = None

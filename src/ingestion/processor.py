@@ -7,7 +7,8 @@ from insightface.app import FaceAnalysis
 from typing import List, Tuple, Optional, Any
 from src.pose.pose_extractor import PoseExtractor
 from src.pose.pose import Pose
-from src.util.image_util import is_face_too_small, calculate_face_quality, calculate_shot_type, get_exif_timestamp
+from src.util.image_util import is_face_too_small, calculate_face_quality, calculate_shot_type, get_exif_timestamp, \
+    get_exif_iso, get_disk_timestamp, compute_global_visual_stats
 from src.common.types import FaceData, ImageAnalysisResult
 from src.util.logger import logger
 from src.model.aesthetic_predictor import AestheticPredictor
@@ -37,6 +38,9 @@ class FeatureExtractor:
             if cv_img is None:
                return None
             h, w, _ = cv_img.shape
+
+            global_stats = compute_global_visual_stats(cv_img)
+
             raw_faces = self.face_app.get(cv_img)
             preprocess_faces: List[FaceData] = []
 
@@ -90,8 +94,13 @@ class FeatureExtractor:
 
             timestamp = get_exif_timestamp(image_path)
             if not timestamp:
-                # TODO: re-sync the photos with last modified data preserved, so we can fall back to system time
-                logger.debug(f"No timestamp found for {image_path}")
+                logger.debug(f"No timestamp found for {image_path}. Using disk timestamp")
+                timestamp = get_disk_timestamp(raw_path)
+
+            iso = get_exif_iso(image_path)
+
+            if not iso:
+                logger.debug(f"No iso value found for {image_path}")
 
             # TODO: Write a test cases to ensure that we are using preprocess_faces, and not kept_raw_faces
             # TODO: Write a test cases to ensure that we are saving timestamp
@@ -105,6 +114,10 @@ class FeatureExtractor:
                 aesthetic_score=aesthetic_score,
                 faces=preprocess_faces,
                 timestamp=timestamp,
+                iso=iso,
+                global_blur=global_stats["global_blur"],
+                global_brightness=global_stats["global_brightness"],
+                global_contrast=global_stats["global_contrast"],
             )
         except Exception as e:
             raise e

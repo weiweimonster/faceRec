@@ -59,6 +59,10 @@ class DatabaseManager:
                 width INTEGER,
                 height INTEGER,
                 aesthetic_score REAL,
+                iso INTEGER,
+                global_blur REAL,
+                global_brightness REAL,
+                global_contrast REAL,
                 meta_tags TEXT -- JSON list of auto-generated tags
             )
         """)
@@ -127,10 +131,17 @@ class DatabaseManager:
 
             # 1. Insert Photo Record
             self.cursor.execute("""
-                        INSERT INTO photos (photo_id, original_path, display_path, file_hash, width, height, timestamp, aesthetic_score)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (photo_id, original_path, display_path, file_hash, result.original_width,
-                              result.original_height, result.timestamp, result.aesthetic_score))
+                                INSERT INTO photos (
+                                    photo_id, original_path, display_path, file_hash,
+                                    width, height, timestamp, aesthetic_score,
+                                    iso, global_blur, global_brightness, global_contrast
+                                )
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                """, (
+                                    photo_id, original_path, display_path, file_hash,
+                                    result.original_width, result.original_height, result.timestamp, result.aesthetic_score,
+                                    result.iso, result.global_blur, result.global_brightness, result.global_contrast
+                                ))
 
             # 2. Insert Face Records
             for face in result.faces:
@@ -313,7 +324,12 @@ class DatabaseManager:
             "photo_id": "ph.photo_id",
             "aesthetic_score": "ph.aesthetic_score",
             "width": "ph.width",
-            "height": "ph.height"
+            "height": "ph.height",
+            # --- NEW MAPPINGS ---
+            "iso": "ph.iso",
+            "global_blur": "ph.global_blur",
+            "global_brightness": "ph.global_brightness",
+            "global_contrast": "ph.global_contrast"
         }
 
         # Handle the "all" logic
@@ -365,9 +381,12 @@ class DatabaseManager:
                     aesthetic_score=row_dict.get('aesthetic_score'),
                     original_width=row_dict.get('width'),
                     original_height=row_dict.get('height'),
+                    iso=row_dict.get('iso'), # Can be None
+                    global_blur=row_dict.get('global_blur', 0.0),
+                    global_brightness=row_dict.get('global_brightness', 0.0),
+                    global_contrast=row_dict.get('global_contrast', 0.0),
                     faces=[]
                 )
-
             # 4. Extract Face Data (only if confidence exists, meaning a face was joined)
             if row_dict.get('confidence') is not None:
                 embedding = None
@@ -389,10 +408,6 @@ class DatabaseManager:
                     pose=row_dict.get('pose'),
                     embedding=embedding,
                 )
-
-                # TODO: Delete this debugging statement
-                # logger.info(f"populating face with {face.name}")
-
                 results_map[p_id].faces.append(face)
 
         return list(results_map.values())

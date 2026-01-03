@@ -2,6 +2,7 @@ from typing import List, Tuple, Any
 import cv2
 import numpy as np
 from datetime import datetime
+from pathlib import Path
 import json
 from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
@@ -32,6 +33,33 @@ def is_face_too_small(
         return True
 
     return False
+
+def compute_global_visual_stats(cv_img: np.ndarray) -> dict:
+    """
+    Calculates whole-image quality metrics (not just for faces).
+    """
+    if cv_img is None:
+        return {"global_blur": 0.0, "global_brightness": 0.0, "global_contrast": 0.0}
+
+    # Convert to Grayscale for math
+    gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+
+    # 1. Global Blur (Laplacian Variance)
+    # High (>300) = Sharp, Low (<100) = Blurry
+    blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+    # 2. Global Brightness (Mean Pixel Intensity)
+    mean_brightness = np.mean(gray)
+
+    # 3. Global Contrast (Standard Deviation)
+    # High std-dev usually means good dynamic range
+    contrast = gray.std()
+
+    return {
+        "global_blur": float(blur_score),
+        "global_brightness": float(mean_brightness),
+        "global_contrast": float(contrast)
+    }
 
 def calculate_face_quality(img_bgr: np.ndarray, bbox: List[int]) -> Tuple[float, float]:
     try:
@@ -64,6 +92,25 @@ def calculate_shot_type(img_bgr: np.ndarray, bbox: List[int]) -> str:
     elif ratio > 0.08:
         shot_type = "Medium-Shot"
     return shot_type
+
+
+def get_exif_iso(image_path: str) -> int | None:
+    val = None
+    try:
+        img = Image.open(image_path)
+        if not img: return None
+        exif = img._getexif()
+        if not exif: return None
+
+        iso_tag = 34855
+        val = exif.get(iso_tag)
+        if val:
+            return int(val)
+        else:
+            return val
+    except:
+        return val
+
 
 
 def get_exif_timestamp(image_path: str) -> str | None:
@@ -124,6 +171,35 @@ def get_exif_timestamp(image_path: str) -> str | None:
 
     except Exception:
         return None
+
+def get_disk_timestamp(image_path: str, as_string: bool = True):
+    """
+    Extracts the filesystem modification time (mtime).
+
+    Args:
+        image_path (str): Path to the file.
+        as_string (bool): If True, returns "YYYY-MM-DD HH:MM:SS".
+                          If False, returns a Python datetime object.
+
+    Returns:
+        datetime or str: The modification time. Returns None if file not found.
+    """
+    path = Path(image_path)
+
+    if not path.exists():
+        return None
+
+    # 1. Get raw Unix timestamp (float: seconds since 1970)
+    # This is what 'tar' preserved.
+    unix_ts = path.stat().st_mtime
+
+    # 2. Convert to Local Time (matches what you see in 'ls -l')
+    dt_object = datetime.fromtimestamp(unix_ts)
+
+    if as_string:
+        return dt_object.strftime("%Y-%m-%d %H:%M:%S")
+
+    return dt_object
 
 
 def get_timestamp_from_heic(heic_path: str) -> str | None:
