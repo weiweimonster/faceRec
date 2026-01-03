@@ -5,6 +5,7 @@ from typing import List
 from src.db.storage import DatabaseManager
 from src.ingestion.processor import FeatureExtractor
 from src.ingestion.format_handler import ensure_display_version
+from src.ingestion.metrics_tracker import IngestionMetricsTracker
 from src.clustering.service import ClusteringService
 from src.util.image_util import calculate_image_hash
 from src.util.logger import logger
@@ -26,6 +27,7 @@ def run_ingestion() -> None:
     # We initialize here to avoid loading heavy models if we are only running clustering
     db = DatabaseManager(sql_path=DB_SQL_PATH, chroma_path=DB_CHROMA_PATH)
     engine = FeatureExtractor(use_gpu=True)
+    tracker = IngestionMetricsTracker()
 
     # Find Files
     all_files: List[str] = []
@@ -58,12 +60,16 @@ def run_ingestion() -> None:
             if result:
                 # Save to DB
                 db.save_result(result, raw_path, display_path, img_hash)
+                tracker.update(result)
             else:
                 logger.warning(f"⚠️  Skipping invalid file: {raw_path}")
         except Exception as e:
             logger.error(f"❌ Error processing {raw_path}: {e}")
 
     db.close()
+
+    tracker.finalize_report("ingestion_metrics.json")
+
     logger.info("✅ Ingestion Complete.")
 
 def run_clustering() -> None:

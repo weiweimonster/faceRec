@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import numpy as np
 from src.pose.pose import Pose
 
@@ -8,17 +8,40 @@ class FaceData:
     """
     Structured data for storing a single face
     """
-    bbox: List[int]
-    embedding: np.ndarray
-    confidence: float
-    shot_type: str = ""
-    blur_score: float = -1.0
-    brightness: float = -1.0
-    yaw: float = -1.0
-    pitch: float = -1.0
-    roll: float = -1.0
-    pose: Pose = None
+    bbox: Optional[List[int]] = None
+    embedding: Optional[np.ndarray] = None
+    confidence: Optional[float] = None
+
+    # Metadata
     name: Optional[str] = None
+    shot_type: Optional[str] = None
+    pose: Optional[Pose] = None
+
+    # Numeric Metrics (None = Calculation Failed / Not Run)
+    blur_score: Optional[float] = None
+    brightness: Optional[float] = None
+    yaw: Optional[float] = None
+    pitch: Optional[float] = None
+    roll: Optional[float] = None
+
+    @property
+    def metrics(self) -> Dict[str, Any]:
+        data = {}
+        # Block specific non-metric fields
+        NON_METRIC_FIELDS = {"bbox", "embedding", "name"}
+
+        for key, value in vars(self).items():
+            if key.startswith("_") or key in NON_METRIC_FIELDS:
+                continue
+
+            data[key] = value
+
+        # Computed metrics
+        if self.bbox and len(self.bbox) == 4:
+            data["face_height_px"] = self.bbox[3] - self.bbox[1]
+            data["face_width_px"] = self.bbox[2] - self.bbox[0]
+
+        return data
 
 @dataclass
 class ImageAnalysisResult:
@@ -37,9 +60,24 @@ class ImageAnalysisResult:
     original_height: Optional[int] = None
     aesthetic_score: Optional[float] = None
     iso: Optional[int] = None
-    global_blur: float = 0.0
-    global_brightness: float = 0.0
-    global_contrast: float = 0.0
+    global_blur: Optional[float] = None
+    global_brightness: Optional[float] = None
+    global_contrast: Optional[float] = None
 
     # Complex nested data
     faces: Optional[List[FaceData]] = None
+
+    @property
+    def metrics(self) -> Dict[str, Any]:
+        data = {}
+        NON_METRIC_FIELDS = {
+            "photo_id", "original_path", "display_path", "file_hash",
+            "faces", "semantic_vector", "meta_tags", "original_width", "original_height"
+        }
+
+        for key, value in vars(self).items():
+            if key.startswith("_") or key in NON_METRIC_FIELDS: continue
+
+            data[key] = value
+
+        return data

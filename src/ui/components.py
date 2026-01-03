@@ -27,64 +27,63 @@ def render_photo_card(result: ImageAnalysisResult, metric: Dict[Any, Any] = None
     st.image(display_path, width="stretch")
 
     # 2. The Inspector
-    with st.expander(f"🔍 Inspect {context_label}"):
-        # Fetching metadata from photo_metadata dict
+    with st.expander(f"🔍 Technical Analysis {context_label}"):
 
-        db_ts = result.timestamp
-        # Section 1: Timestamps
-        st.caption(f"**DB Date:** {db_ts}")
-        if not skip_metric:
-            semantic_similarity = metric.get("semantic_sim")
-            if semantic_similarity: st.caption(f"**Semantic Similarity:** {semantic_similarity:.5f}")
+        # --- SECTION A: RANKING METRICS ---
+        if metric:
+            st.subheader("Ranking Breakdown")
+            # Separate keys into groups to make them readable
+            semantic_keys = {"semantic", "mmr_rank"}
+            # Everything else starting with 'g_' is global technical
+            global_tech = {k: v for k, v in metric.items() if k.startswith("g_")}
+            # Everything else starting with 'f_' is face technical
+            face_tech = {k: v for k, v in metric.items() if k.startswith("f_")}
 
-            final_relevance = metric.get("final_relevance")
-            if final_relevance: st.caption(f"**Final Relevance Score:** {final_relevance:.5f}")
-            st.markdown(f"""
-                <div style="font-size: 0.8em; margin-bottom: 5px; border-left: 2px solid #555; padding-left: 5px;">
-                    • Norm Quality Final (with confidence): {metric["quality_boost"]:.3f}<br>
-                    • Norm Quality Raw (w/o confidence): {metric["total_quality_raw"]:.3f}<br>
-                    • Norm Brightness: {metric["norm_brightness"]:.3f}<br>
-                    • Norm Blur: {metric["norm_blur"]:.2f}<br>
-                    • Norm Size (H/W): {metric["norm_size"]:.3f}<br>
-                    • Norm Orientation: {metric["norm_orientation"]:.3f}<br>
-                    • MMR Rank: {metric["mmr_rank"]}<br>
-                </div>
-                """, unsafe_allow_html=True)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.caption("Relevance & Diversity")
+                for k in semantic_keys:
+                    if k in metric: st.write(f"**{k.replace('_', ' ').title()}:** {metric[k]}")
 
-        st.markdown("---")
+            with col2:
+                st.caption("Global Quality Scores")
+                for k, v in global_tech.items():
+                    st.write(f"**{k[2:].title()}:** {v}") # Strips 'g_'
 
-        # Print out Metrics
+        st.divider()
 
+        # --- SECTION B: FACES ---
+        faces: List[FaceData] = result.faces or []
+        if faces:
+            st.subheader(f"👥 Detected {len(faces)} Faces")
+            for i, face in enumerate(faces):
+                fcol1, fcol2 = st.columns([1, 2])
 
-        # Section 2: Faces & Poses (Requested Feature)
-        faces: List[FaceData] = result.faces
-        if len(faces) > 0:
-            for face in faces:
-                # st.caption(f"Debug {data}")
-                st.caption(f"👥 **Detected {len(faces)} Faces**")
-                # Load the cropped face
-                cropped_face = load_face_crop(display_path, face.bbox)
-                face_width, face_height = calculate_face_dim(face.bbox)
-                if cropped_face:
-                    st.image(cropped_face, width="stretch")
-                st.markdown(f"""
-                <div style="font-size: 0.8em; margin-bottom: 5px; border-left: 2px solid #555; padding-left: 5px;">
-                    <b>{face.name}</b><br>
-                    • Pose: <code>{face.pose}</code> ({face.shot_type})<br>
-                    • Angles: Y:{int(face.yaw)}° / P:{int(face.pitch)}°<br>
-                    • Confidence: {face.confidence:.2f}<br>
-                    • Blur: {face.blur_score:.2f}<br>
-                    • Brightness: {face.brightness:.2f}<br>
-                    • Face Width: {face_width:.2f}<br>
-                    • Face Height: {face_height:.2f}<br>
-                </div>
-                """, unsafe_allow_html=True)
+                with fcol1:
+                    cropped_face = load_face_crop(result.display_path, face.bbox)
+                    if cropped_face:
+                        st.image(cropped_face, width="stretch")
+
+                with fcol2:
+                    st.markdown(f"**{face.name or f'Unknown {i+1}'}**")
+                    # Use the .metrics property we added to FaceData for dynamic rendering!
+                    face_metrics = face.metrics
+
+                    # Group them into a readable string
+                    summary = []
+                    for k, v in face_metrics.items():
+                        if v is not None:
+                            val = f"{v:.2f}" if isinstance(v, float) else str(v)
+                            summary.append(f"• {k.replace('_', ' ').title()}: `{val}`")
+
+                    st.markdown("<br>".join(summary), unsafe_allow_html=True)
+                st.write("") # Spacer
         else:
             st.caption("No faces detected.")
 
-        st.markdown("---")
+        st.divider()
 
-        # Section 3: Paths
-        st.caption("📂 Paths")
-        orig_path = result.original_path
-        st.code(f"Orig: {os.path.basename(orig_path)}", language="bash")
+        # --- SECTION C: FILE INFO ---
+        st.caption("📂 File System")
+        st.text(f"Timestamp: {result.timestamp}")
+        st.code(f"Original: {os.path.basename(result.original_path)}", language="bash")

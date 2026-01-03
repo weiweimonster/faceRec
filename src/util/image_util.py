@@ -190,7 +190,6 @@ def get_disk_timestamp(image_path: str, as_string: bool = True):
         return None
 
     # 1. Get raw Unix timestamp (float: seconds since 1970)
-    # This is what 'tar' preserved.
     unix_ts = path.stat().st_mtime
 
     # 2. Convert to Local Time (matches what you see in 'ls -l')

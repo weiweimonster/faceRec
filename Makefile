@@ -25,6 +25,10 @@ ingest:
 	@echo "Starting photo ingestion..."
 	$(PYTHON) $(MAIN) ingest
 
+cluster:
+	@echo "Starting clustering..."
+	$(PYTHON) $(MAIN) cluster
+
 appv2:
 	@echo "Starting App V2..."
 	$(STREAMLIT) run appv2.py
