@@ -1,4 +1,4 @@
-from typing import List, Tuple, Any
+from typing import List, Tuple, Any, Optional
 import cv2
 import numpy as np
 from datetime import datetime
@@ -200,6 +200,35 @@ def get_disk_timestamp(image_path: str, as_string: bool = True):
 
     return dt_object
 
+def extract_time_features(timestamp_str: Optional[str]) -> Tuple[Optional[int], Optional[str]]:
+    """
+    Parses a timestamp string and returns (month, time_period).
+    Handles standard ISO and some common EXIF formats.
+    """
+    if not timestamp_str:
+        return None, None
+
+    try:
+        # Standardizing EXIF "2023:12:01" to ISO "2023-12-01"
+        clean_ts = timestamp_str.replace(":", "-", 2) if ":" in timestamp_str[:11] else timestamp_str
+        dt = datetime.fromisoformat(clean_ts)
+
+        month = dt.month
+        hour = dt.hour
+
+        # Mapping logic
+        if 5 <= hour < 12:
+            period = "morning"
+        elif 12 <= hour < 17:
+            period = "afternoon"
+        elif 17 <= hour < 21:
+            period = "evening"
+        else:
+            period = "night"
+
+        return month, period
+    except Exception:
+        return None, None
 
 def get_timestamp_from_heic(heic_path: str) -> str | None:
     from pillow_heif import register_heif_opener
