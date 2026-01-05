@@ -16,6 +16,8 @@ class SearchFilters:
     people: List[str] = field(default_factory=list)
     year: Optional[int] = None
     pose: Optional[Pose] = None
+    month: Optional[int] = None
+    time_period: Optional[str] = None
 
     # For Generating
     prompt: Optional[str] = None
@@ -48,6 +50,8 @@ class SearchFilters:
             people=kwargs.get("people", []),
             semantic_query=kwargs.get("search_query"),
             year=kwargs.get("year"),
+            month=kwargs.get("month"),
+            time_period=kwargs.get("time_period"),
             pose=parsed_pose,
             is_person_search=kwargs.get("requires_people", True) ,
             prompt=kwargs.get("prompt")
@@ -61,17 +65,12 @@ class SearchFilters:
         parts = []
 
         # Only add fields that are NOT empty
-        if self.people:
-            parts.append(f"People: {', '.join(self.people)}")
-
-        if self.pose:
-            parts.append(f"Pose: {self.pose.value}")  # .value prints "Side" instead of Pose.SIDE
-
-        if self.year:
-            parts.append(f"Year: {self.year}")
-
-        if self.semantic_query:
-            parts.append(f"Query: '{self.semantic_query}'")
+        if self.people: parts.append(f"People: {', '.join(self.people)}")
+        if self.pose: parts.append(f"Pose: {self.pose.value}")
+        if self.year: parts.append(f"Year: {self.year}")
+        if self.month: parts.append(f"Month: {self.month}")
+        if self.time_period: parts.append(f"Time: {self.time_period}")
+        if self.semantic_query: parts.append(f"Query: '{self.semantic_query}'")
 
         if not parts:
             return "[Filters: None]"

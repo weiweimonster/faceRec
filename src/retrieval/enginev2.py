@@ -100,7 +100,8 @@ class SearchEngine:
         final_ranked_results, metrics = ranker.rank(
             target_name=target_person,
             lambda_param=0.7,
-            top_k=limit
+            top_k=limit,
+            pose=filters.pose,
         )
 
         logger.info(f"✅ Search complete. Returning top {len(final_ranked_results)} results.")

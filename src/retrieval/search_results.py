@@ -1,3 +1,4 @@
+from src.pose.pose import Pose
 from src.util.logger import logger
 from src.common.types import FaceData, ImageAnalysisResult
 from typing import Optional, List, Dict, Any, Tuple
@@ -64,7 +65,7 @@ class SearchResultRanker:
 
         # Logarithmic normalization
         # log2(100) ~ 6.64, log2(3200) ~ 11.64
-        min_log = math.log2(100)
+        min_log = math.log2(self.QUALITY_BOUNDS["iso"]["min"])
         max_log = math.log2(self.QUALITY_BOUNDS["iso"]["max"])
 
         curr_log = math.log2(iso_val)
@@ -110,7 +111,7 @@ class SearchResultRanker:
         }
         return score, metrics
 
-    def _calculate_face_quality(self, item: ImageAnalysisResult, target_name: str) -> Tuple[float, Dict[str, float]]:
+    def _calculate_face_quality(self, item: ImageAnalysisResult, target_name: str, requested_pose: Optional[Pose] = None) -> Tuple[float, Dict[str, float]]:
         if not item.faces: return 0.0, {}
 
         # 1. Fast Lookup: Just find the first face matching the name
@@ -141,8 +142,7 @@ class SearchResultRanker:
         s_size = (h_score + w_score) / 2
 
         # Orientation (Yaw/Pitch)
-        yaw, pitch = abs(target_face.yaw or 0), abs(target_face.pitch or 0)
-        s_orient = 1.0 - self._normalize(max(yaw, pitch), 0, cfg["angle_limit"])
+        s_orient = self._calculate_orientation_score(target_face, requested_pose)
 
         # Weighted Sum
         score = (s_blur * 0.4) + (s_size * 0.3) + (s_orient * 0.3)
@@ -151,15 +151,41 @@ class SearchResultRanker:
             "f_blur": round(s_blur, 2),
             "f_size": round(s_size, 2),
             "f_orient": round(s_orient, 2),
-            "face_score": round(score, 3)
+            "f_score": round(score, 3)
         }
 
         return score * target_face.confidence, metrics
 
-    def rank(self, target_name: str = None, lambda_param: float = 0.6, top_k: int = 50) -> Tuple[List[ImageAnalysisResult], Dict[str, Any]]:
+    def _calculate_orientation_score(self, target_face: FaceData, requested_pose: Optional[Pose]) -> float:
+        """
+        Calculates a continuous score [0.0 - 1.0] based on how close
+        the face is to the requested intent bullseye.
+        """
+        # 1. Determine the target anchor
+        # If user didn't specify, we usually want Frontal shots
+        target_pose = requested_pose if requested_pose else Pose.FRONT
+        target_yaw, target_pitch = target_pose.anchors
+
+        # 2. Calculate the Angular Distance
+        # We use Euclidean distance in 2D angle space
+        yaw_diff = target_face.yaw - target_yaw
+        pitch_diff = target_face.pitch - target_pitch
+
+        # Distance formula: sqrt(a² + b²)
+        distance = math.sqrt(yaw_diff**2 + pitch_diff**2)
+
+        # 3. Normalize the distance
+        # We define a 'Radius of Acceptance'.
+        # For example, if you are more than 60 degrees away, the score is 0.
+        max_acceptable_distance = 60.0
+
+        score = 1.0 - (distance / max_acceptable_distance)
+        return max(0.0, score)
+
+    def rank(self, target_name: str = None, lambda_param: float = 0.6, top_k: int = 50, pose: Optional[Pose] = None) -> Tuple[List[ImageAnalysisResult], Dict[str, Any]]:
         if not self.results: return [], {}
 
-        logger.info(f"Ranking {len(self.results)} items. Target: {target_name or 'None'}")
+        logger.info(f"Ranking {len(self.results)} items. Target: {target_name or 'None'}, Pose: {pose or 'None'}")
 
         for item in self.results:
             path = item.display_path
@@ -173,7 +199,7 @@ class SearchResultRanker:
             # C. Face Quality (Conditional)
             face_q, f_metrics = 0.0, {}
             if target_name:
-                face_q, f_metrics = self._calculate_face_quality(item, target_name)
+                face_q, f_metrics = self._calculate_face_quality(item, target_name, pose)
 
             # --- FINAL FORMULA ---
             # Score = (Semantic * 0.85) + (Face * 0.1) + (Global * 0.05)

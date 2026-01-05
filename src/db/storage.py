@@ -56,6 +56,8 @@ class DatabaseManager:
                 file_hash TEXT UNIQUE,
                 display_path TEXT,
                 timestamp DATETIME,
+                month INTEGER,
+                time_period TEXT,
                 width INTEGER,
                 height INTEGER,
                 aesthetic_score REAL,
@@ -101,6 +103,7 @@ class DatabaseManager:
         # Create indices for faster SQL lookups
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_person_id ON photo_faces(person_id);")
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON photos(timestamp);")
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_time_meta ON photos(month, time_period);")
 
         self.conn.commit()
 
@@ -127,20 +130,20 @@ class DatabaseManager:
         photo_id = str(uuid.uuid4())
 
         try:
-            # --- Step A: Insert into SQLite ---
-
             # 1. Insert Photo Record
             self.cursor.execute("""
                                 INSERT INTO photos (
                                     photo_id, original_path, display_path, file_hash,
-                                    width, height, timestamp, aesthetic_score,
-                                    iso, global_blur, global_brightness, global_contrast
+                                    width, height, timestamp, month, time_period,
+                                    aesthetic_score, iso, global_blur, global_brightness, global_contrast
                                 )
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """, (
                                     photo_id, original_path, display_path, file_hash,
-                                    result.original_width, result.original_height, result.timestamp, result.aesthetic_score,
-                                    result.iso, result.global_blur, result.global_brightness, result.global_contrast
+                                    result.original_width, result.original_height,
+                                    result.timestamp, result.month, result.time_period, # UPDATED
+                                    result.aesthetic_score, result.iso, result.global_blur,
+                                    result.global_brightness, result.global_contrast
                                 ))
 
             # 2. Insert Face Records
@@ -212,6 +215,9 @@ class DatabaseManager:
     def get_candidate_path(self, filters: SearchFilters) -> List[str]:
         params = []
 
+        # This ensures it exists for month, time_period, and year filters.
+        p = "ph." if filters.is_person_search else ""
+
         # Determine base query based on search mode
         if filters.is_person_search:
             logger.info("Mode: Person Search")
@@ -233,10 +239,19 @@ class DatabaseManager:
 
         if filters.year:
             logger.info(f"Year Filter added to SQL Query: {str(filters.year)}")
-            # Handle different table aliases for year filtering
-            prefix = "ph." if filters.is_person_search else ""
-            query += f" AND strftime('%Y', {prefix}timestamp) = ?"
+            # You can now safely use the 'p' defined at the top
+            query += f" AND strftime('%Y', {p}timestamp) = ?"
             params.append(str(filters.year))
+
+        if filters.month:
+            logger.info(f"Month Filter: {filters.month}")
+            query += f" AND {p}month = ?"
+            params.append(filters.month)
+
+        if filters.time_period:
+            logger.info(f"Time Period Filter: {filters.time_period}")
+            query += f" AND {p}time_period = ?"
+            params.append(filters.time_period.lower())
 
         if filters.people:
             logger.info("People filter detected, parsing names.....")
@@ -325,11 +340,12 @@ class DatabaseManager:
             "aesthetic_score": "ph.aesthetic_score",
             "width": "ph.width",
             "height": "ph.height",
-            # --- NEW MAPPINGS ---
             "iso": "ph.iso",
             "global_blur": "ph.global_blur",
             "global_brightness": "ph.global_brightness",
-            "global_contrast": "ph.global_contrast"
+            "global_contrast": "ph.global_contrast",
+            "month": "ph.month",
+            "time_period": "ph.time_period",
         }
 
         # Handle the "all" logic
