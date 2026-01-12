@@ -20,7 +20,13 @@ class GPTClient:
                             "search_query": {
                                 # TODO: Make GPT responded with multiple question for broader extraction. Might also incorporate pass history of the conversation for searching
                                 "type": "string",
-                                "description": "Optimized visual keywords for retrieving reference photos. Remove verbs like 'generate', 'create'. Example: 'Jacob walking in New York street"
+                                "description": (
+                                    "Optimized visual keywords for vector search. "
+                                    "CRITICAL: Replace specific names with their visual subject class "
+                                    "(e.g., 'Jacob' -> 'person', 'Sarah' -> 'person'). "
+                                    "Focus on the action, scene, and lighting. "
+                                    "Example Input: 'Jacob under a tree' -> Output: 'person under a tree'."
+                                )
                             },
                             "people": {
                                 "type": "array",
