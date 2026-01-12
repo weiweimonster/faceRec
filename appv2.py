@@ -120,7 +120,7 @@ st.title("🤖 My AI Photo Album")
 # Removed "Chat" tab, focused on Core Tools
 app_mode = st.sidebar.radio(
     "Navigate",
-    ["🔎 Search", "🎨 Generate", "👥 Labeling"]
+    ["🔎 Search", "👥 Labeling"]
 )
 
 show_raw_db = st.sidebar.toggle("Show Raw Database Metrics", value=False)
@@ -129,7 +129,7 @@ engine = get_search_engine()
 if "search_session_id" not in st.session_state:
     st.session_state.search_session_id = str(uuid.uuid4())
 
-if app_mode in ["🔎 Search", "🎨 Generate"]:
+if app_mode in ["🔎 Search"]:
     st.sidebar.divider()
 
     st.sidebar.markdown("### ⚙️ Ranking Engine")
@@ -220,67 +220,6 @@ if app_mode == "🔎 Search":
                     )
         else:
             st.warning("No photos found.")
-
-elif app_mode == "🎨 Generate":
-    st.header("Search your Memories")
-    engine = get_search_engine()
-    gpt = get_gpt_client()
-    db = get_db()
-
-    with st.form("gen_form"):
-        query = st.text_input("Ask for anything...", placeholder="e.g. 'Generate a photo of Jacob playing'")
-        submitted = st.form_submit_button("Generate", type="primary")
-
-    if submitted and query:
-        # Generate a new session id
-        st.session_state.search_session_id = str(uuid.uuid4())
-        current_sess_id = st.session_state.search_session_id
-
-        search_filter, message = gpt._get_agent_response(query)
-        if search_filter:
-            db.log_search_query(current_sess_id, query, search_filter)
-            st.success(f"✅ Agent Parsed: {search_filter}")
-            with st.expander("🔍 See Raw Arguments", expanded=True):
-                c1, c2 = st.columns(2)
-
-                with c1:
-                    st.markdown("**Parsed Intent**")
-                    if search_filter.fn_name == "search_memory":
-                        st.warning("📂 Search Database")
-                    elif search_filter.fn_name == "generate_image":
-                        st.info("🎨 Generate Image")
-
-                with c2:
-                    st.markdown("**Extracted Filters**")
-                    st.json(search_filter.to_dict())
-        results, metrics = engine.searchv2(search_filter, limit=50)
-        st.markdown(f"**Found {len(results)} results for:** `{query}`")
-
-        if "search_results_objects" not in st.session_state:
-            st.session_state.search_results_objects = {}
-        st.session_state.search_results_objects[current_sess_id] = results
-
-        if "search_metrics_map" not in st.session_state:
-            st.session_state.search_metrics_map = {}
-        st.session_state.search_metrics_map[current_sess_id] = metrics
-
-        with st.expander("Show Ranked Results", expanded=True):
-            if results:
-                cols = st.columns(3)
-                current_sess_id = st.session_state.search_session_id
-
-                for i, image_analysis_results in enumerate(results):
-                    image_metric = metrics[image_analysis_results.display_path]
-                    with cols[i % 3]:
-                        render_photo_card(
-                            image_analysis_results,
-                            image_metric,
-                            context_label=f"#{i + 1}",
-                            show_raw=show_raw_db,
-                            session_id=current_sess_id # --- PASS SESSION ID ---
-                        )
-            else:
-                st.warning("No photos found.")
 
 
 
