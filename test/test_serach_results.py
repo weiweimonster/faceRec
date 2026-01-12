@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 import torch
 from src.common.types import ImageAnalysisResult, FaceData
-from src.retrieval.search_results import SearchResultRanker
+from src.rank.search_results import SearchResultRanker
 
 @pytest.fixture
 def sample_results():
