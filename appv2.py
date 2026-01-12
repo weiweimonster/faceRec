@@ -1,19 +1,15 @@
 import streamlit as st
 import os
-import cv2
-import numpy as np
-
-from typing import Optional, List, Tuple
-
+import uuid
 from main import DB_CHROMA_PATH
 from src.retrieval.enginev2 import SearchEngine
 from src.util.search_config import SearchFilters
 from src.rag.gpt_client import GPTClient
-from src.util.image_util import get_exif_timestamp, get_timestamp_from_heic, load_face_crop_from_str
+from src.util.image_util import load_face_crop_from_str
 from src.ui.components import render_photo_card
-from PIL import Image
 from dotenv import load_dotenv
 from src.db.storage import DatabaseManager
+from src.util.logger import logger
 
 # --- Configuration ---
 DB_SQL_PATH: str = ".db/sqlite/photos.db"
@@ -44,6 +40,79 @@ def get_gpt_client():
 def load_face_crop_from_str_streamlit(image_path: str, bbox_str: str):
     return load_face_crop_from_str(image_path, bbox_str)
 
+def save_feedback_batch(db_manager: DatabaseManager):
+    """
+    Commits selections using 'Max Rank Cutoff' logic.
+    Passes full ImageAnalysisResult objects to the DB manager.
+    """
+    # 1. Get Selections
+    selected_pairs = st.session_state.get("selected_pairs", set())
+
+    # 2. Get Rich History (Full Objects)
+    history_map = st.session_state.get("search_results_objects", {})
+    history_metrics = st.session_state.get("search_metrics_map", {})
+
+    if not selected_pairs and not history_map:
+        st.sidebar.warning("No data to save.")
+        return
+
+    # Group clicks by session for processing
+    selections_by_session = {}
+    for pid, sid in selected_pairs:
+        if sid not in selections_by_session:
+            selections_by_session[sid] = set()
+        selections_by_session[sid].add(pid)
+
+    count_pos = 0
+    count_neg = 0
+
+    with st.spinner("Saving training data..."):
+        for session_id, positive_set in selections_by_session.items():
+
+            # This returns List[ImageAnalysisResult]
+            results_list = history_map.get(session_id, [])
+            metrics_map = history_metrics.get(session_id, {})
+
+            if not results_list:
+                continue
+
+            # 1. FIND THE CUTOFF (Last Clicked Rank)
+            max_index = -1
+            for idx, res in enumerate(results_list):
+                if res.photo_id in positive_set:
+                    max_index = max(max_index, idx)
+
+            # If no clicks in this session (shouldn't happen due to loop logic), skip
+            if max_index == -1:
+                continue
+
+            # 2. ADD BUFFER (e.g., +2 rows assumed seen)
+            cutoff_index = min(max_index + 3, len(results_list))
+            logger.info(f"Cutoff index for storing interaction is {cutoff_index}")
+
+            # 3. SAVE VALID ZONE
+            for i in range(cutoff_index):
+                res_obj = results_list[i]
+
+                label = 1 if res_obj.photo_id in positive_set else 0
+                specific_scores = metrics_map.get(res_obj.display_path, {})
+
+                # --- CALL THE NEW DB FUNCTION ---
+                db_manager.log_interaction_from_object(
+                    result=res_obj,
+                    session_id=session_id,
+                    label=label,
+                    dynamic_scores=specific_scores
+                )
+
+                if label == 1: count_pos += 1
+                else: count_neg += 1
+
+    # Cleanup
+    st.session_state.selected_pairs = set()
+    st.toast(f"✅ Saved {count_pos} Positives & {count_neg} Negatives", icon="💾")
+    st.sidebar.success(f"Saved {count_pos} Pos / {count_neg} Neg")
+
 # --- Main App ---
 
 st.title("🤖 My AI Photo Album")
@@ -54,6 +123,40 @@ app_mode = st.sidebar.radio(
     ["🔎 Search", "🎨 Generate", "👥 Labeling"]
 )
 
+show_raw_db = st.sidebar.toggle("Show Raw Database Metrics", value=False)
+engine = get_search_engine()
+# Generate a default session id when started
+if "search_session_id" not in st.session_state:
+    st.session_state.search_session_id = str(uuid.uuid4())
+
+if app_mode in ["🔎 Search", "🎨 Generate"]:
+    st.sidebar.divider()
+
+    st.sidebar.markdown("### ⚙️ Ranking Engine")
+    strategy_choice = st.sidebar.radio(
+        "Ranking Model:",
+        options=["Smart AI (XGBoost)", "Classic (Heuristic)"],
+        index=0, # Default to Smart
+        help="Switch between the Machine Learning ranker and the manual logic."
+    )
+
+    if "XGBoost" in strategy_choice:
+        engine.set_ranking_strategy("xgboost")
+        st.sidebar.caption("✅ Using ML Model (v0.72)")
+    else:
+        engine.set_ranking_strategy("heuristic")
+        st.sidebar.caption("⚠️ Using Manual Rules")
+
+    st.sidebar.markdown("### 🧠 LTR Training")
+
+    # Show count of currently selected items
+    current_selection = st.session_state.get("selected_pairs", set())
+    st.sidebar.caption(f"Selected: {len(current_selection)} photos")
+
+    if st.sidebar.button("💾 Save Feedback", type="primary"):
+        db = get_db()
+        save_feedback_batch(db)
+
 # ==========================================
 # TAB 1: SEARCH ENGINE
 # ==========================================
@@ -61,11 +164,21 @@ if app_mode == "🔎 Search":
     st.header("Search your Memories")
     engine = get_search_engine()
     gpt = get_gpt_client()
-    query = st.text_input("Ask for anything...", placeholder="e.g. 'Ethan at the beach'", key="search_box")
+    db = get_db()
 
-    if query:
+    with st.form("gen_form"):
+        query = st.text_input("Ask for anything...", placeholder="e.g. 'Generate a photo of Jacob playing'")
+        submitted = st.form_submit_button("Generate", type="primary")
+
+    if submitted and query:
+        # Generate a new session id
+        st.session_state.search_session_id = str(uuid.uuid4())
+        current_sess_id = st.session_state.search_session_id
+
         search_filter, message = gpt._get_agent_response(query)
         if search_filter:
+
+            db.log_search_query(current_sess_id, query, search_filter)
             st.success(f"✅ Agent Parsed: {search_filter}")
             with st.expander("🔍 See Raw Arguments", expanded=True):
                 c1, c2 = st.columns(2)
@@ -83,12 +196,28 @@ if app_mode == "🔎 Search":
 
         results, metrics = engine.searchv2(search_filter, limit=100)
         st.markdown(f"**Found {len(results)} results for:** `{query}`")
+
+        if "search_results_objects" not in st.session_state:
+            st.session_state.search_results_objects = {}
+        st.session_state.search_results_objects[current_sess_id] = results
+
+        if "search_metrics_map" not in st.session_state:
+            st.session_state.search_metrics_map = {}
+        st.session_state.search_metrics_map[current_sess_id] = metrics
+
         if results:
             cols = st.columns(3)
+            current_sess_id = st.session_state.search_session_id
             for i, image_analysis_result in enumerate(results):
                 metric = metrics[image_analysis_result.display_path]
                 with cols[i % 3]:
-                    render_photo_card(image_analysis_result, metric, context_label=f"#{i + 1}")
+                    render_photo_card(
+                        image_analysis_result,
+                        metric,
+                        context_label=f"#{i + 1}",
+                        show_raw=show_raw_db,
+                        session_id=current_sess_id # --- PASS SESSION ID ---
+                    )
         else:
             st.warning("No photos found.")
 
@@ -96,12 +225,20 @@ elif app_mode == "🎨 Generate":
     st.header("Search your Memories")
     engine = get_search_engine()
     gpt = get_gpt_client()
-    query = st.text_input("Ask for anything...",
-                          placeholder="e.g. 'Generate a photo of Jacob playing in New York'", key="generate_box")
+    db = get_db()
 
-    if query:
+    with st.form("gen_form"):
+        query = st.text_input("Ask for anything...", placeholder="e.g. 'Generate a photo of Jacob playing'")
+        submitted = st.form_submit_button("Generate", type="primary")
+
+    if submitted and query:
+        # Generate a new session id
+        st.session_state.search_session_id = str(uuid.uuid4())
+        current_sess_id = st.session_state.search_session_id
+
         search_filter, message = gpt._get_agent_response(query)
         if search_filter:
+            db.log_search_query(current_sess_id, query, search_filter)
             st.success(f"✅ Agent Parsed: {search_filter}")
             with st.expander("🔍 See Raw Arguments", expanded=True):
                 c1, c2 = st.columns(2)
@@ -118,13 +255,30 @@ elif app_mode == "🎨 Generate":
                     st.json(search_filter.to_dict())
         results, metrics = engine.searchv2(search_filter, limit=50)
         st.markdown(f"**Found {len(results)} results for:** `{query}`")
+
+        if "search_results_objects" not in st.session_state:
+            st.session_state.search_results_objects = {}
+        st.session_state.search_results_objects[current_sess_id] = results
+
+        if "search_metrics_map" not in st.session_state:
+            st.session_state.search_metrics_map = {}
+        st.session_state.search_metrics_map[current_sess_id] = metrics
+
         with st.expander("Show Ranked Results", expanded=True):
             if results:
                 cols = st.columns(3)
+                current_sess_id = st.session_state.search_session_id
+
                 for i, image_analysis_results in enumerate(results):
                     image_metric = metrics[image_analysis_results.display_path]
                     with cols[i % 3]:
-                        render_photo_card(image_analysis_results, image_metric, context_label=f"#{i + 1}")
+                        render_photo_card(
+                            image_analysis_results,
+                            image_metric,
+                            context_label=f"#{i + 1}",
+                            show_raw=show_raw_db,
+                            session_id=current_sess_id # --- PASS SESSION ID ---
+                        )
             else:
                 st.warning("No photos found.")
 

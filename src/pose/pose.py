@@ -1,5 +1,5 @@
 from enum import Enum
-
+from typing import Tuple
 
 class Pose(Enum):
     # Standard Directions
@@ -17,6 +17,23 @@ class Pose(Enum):
 
     def __str__(self):
         return self.value
+
+    @property
+    def anchors(self) -> Tuple[float, float]:
+        """Returns the (Yaw, Pitch) bullseye for this pose."""
+        # Using the thresholds from your from_angles method as anchor points
+        mapping = {
+            Pose.FRONT: (0.0, 0.0),
+            Pose.SIDE_LEFT: (45.0, 0.0),
+            Pose.SIDE_RIGHT: (-45.0, 0.0),
+            Pose.UP: (0.0, -30.0),
+            Pose.DOWN: (0.0, 30.0),
+            Pose.UP_LEFT: (35.0, -25.0),
+            Pose.UP_RIGHT: (-35.0, -25.0),
+            Pose.DOWN_LEFT: (35.0, 25.0),
+            Pose.DOWN_RIGHT: (-35.0, 25.0),
+        }
+        return mapping.get(self, (0.0, 0.0))
 
     @classmethod
     def from_angles(cls, yaw: float, pitch: float) -> "Pose":

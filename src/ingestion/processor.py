@@ -8,7 +8,7 @@ from typing import List, Tuple, Optional, Any
 from src.pose.pose_extractor import PoseExtractor
 from src.pose.pose import Pose
 from src.util.image_util import is_face_too_small, calculate_face_quality, calculate_shot_type, get_exif_timestamp, \
-    get_exif_iso, get_disk_timestamp, compute_global_visual_stats
+    get_exif_iso, get_disk_timestamp, compute_global_visual_stats, extract_time_features
 from src.common.types import FaceData, ImageAnalysisResult
 from src.util.logger import logger
 from src.model.aesthetic_predictor import AestheticPredictor
@@ -97,6 +97,11 @@ class FeatureExtractor:
                 logger.debug(f"No timestamp found for {image_path}. Using disk timestamp")
                 timestamp = get_disk_timestamp(raw_path)
 
+            month = None
+            time_period = None
+            if timestamp:
+                month, time_period = extract_time_features(timestamp)
+
             iso = get_exif_iso(image_path)
 
             if not iso:
@@ -114,6 +119,8 @@ class FeatureExtractor:
                 aesthetic_score=aesthetic_score,
                 faces=preprocess_faces,
                 timestamp=timestamp,
+                month=month,
+                time_period=time_period,
                 iso=iso,
                 global_blur=global_stats["global_blur"],
                 global_brightness=global_stats["global_brightness"],

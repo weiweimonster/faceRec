@@ -1,18 +1,77 @@
-from src.pose.pose import Pose
-from src.util.logger import logger
-from src.common.types import FaceData, ImageAnalysisResult
-from typing import Optional, List, Dict, Any, Tuple
-import torch
-import numpy as np
 import math
+from typing import List, Dict, Any, Tuple, Optional
+from src.common.types import ImageAnalysisResult, FaceData
+from src.pose.pose import Pose
+from .base import BaseRankingStrategy, ScoredCandidate
 
-class SearchResultRanker:
-    def __init__(self, results: List[ImageAnalysisResult], semantic_scores: Dict[str, float]):
-        logger.info(f"Initializing Ranker with {len(results)} items")
-        self.results = results
-        self.semantic_scores = semantic_scores
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.metrics: Dict[str, Dict[str, Any]] = {}
+class HeuristicStrategy(BaseRankingStrategy):
+    # Tunable Hyperparameters (Moved from original class)
+    QUALITY_BOUNDS = {
+        "face_blur": {"min": 30, "max": 1200},
+        "face_size": {"min": 50, "max": 550},
+        "global_blur": {"min": 21.0, "max": 1400.0},
+        "iso": {"min": 40, "max": 1600},
+        "contrast": {"min": 35.0, "max": 80.0},
+        "aesthetic": {"min": 4.0, "max": 5.5}
+    }
+
+    WEIGHTS = {
+        "semantic": 0.85,
+        "face_quality": 0.1,
+        "global_quality": 0.05,
+        "w_aesthetic": 0.4,
+        "w_sharpness": 0.3,
+        "w_iso": 0.2,
+        "w_contrast": 0.1
+    }
+
+    def score_candidates(
+            self,
+            results: List[ImageAnalysisResult],
+            semantic_scores: Dict[str, float],
+            target_name: Optional[str] = None,
+            pose: Optional[Pose] = None
+    ) -> List[ScoredCandidate]:
+
+        # Initialize empty results
+        scored_items: List[ScoredCandidate] = []
+
+        # Iterate though all the result and calculate metrics
+        for item in results:
+            path = item.display_path
+
+            # get the semantic score
+            semantic_sim = semantic_scores[path]
+
+            # Calculate the global quality scores
+            global_q, g_metrics = self._calculate_global_quality(item)
+
+            face_q: float = 0.0
+            f_metrics: Dict[str, float] = {}
+
+            if target_name:
+                # Calculate the face quality score
+                face_q, f_metrics = self._calculate_face_quality(item, target_name, pose)
+
+            w = self.WEIGHTS
+
+            # Combine semantic score and global score
+            final_score = (semantic_sim * w["semantic"]) + (global_q * w["global_quality"])
+
+            # If this is person related, then combine face quality score
+            if target_name:
+                final_score += (face_q * w["face_quality"])
+
+            metrics: Dict[str, Any] = {
+                "final_relevance": round(final_score, 4),
+                "semantic": round(semantic_sim, 3),
+                **g_metrics,
+                **f_metrics
+            }
+
+            scored_items.append((item, final_score, metrics))
+
+        return scored_items
 
     def _normalize(self, value: float, min_v: float, max_v: float) -> float:
         """Linear normalization to 0.0 - 1.0"""
@@ -150,87 +209,4 @@ class SearchResultRanker:
         score = 1.0 - (distance / max_acceptable_distance)
         return max(0.0, score)
 
-    def rank(self, target_name: str = None, lambda_param: float = 0.6, top_k: int = 50, pose: Optional[Pose] = None) -> Tuple[List[ImageAnalysisResult], Dict[str, Any]]:
-        if not self.results: return [], {}
 
-        logger.info(f"Ranking {len(self.results)} items. Target: {target_name or 'None'}, Pose: {pose or 'None'}")
-
-        for item in self.results:
-            path = item.display_path
-
-            # A. Semantic Score (The Base)
-            semantic_sim = self.semantic_scores.get(path, 0.0)
-
-            # B. Global Quality (Applies to everyone)
-            global_q, g_metrics = self._calculate_global_quality(item)
-
-            # C. Face Quality (Conditional)
-            face_q, f_metrics = 0.0, {}
-            if target_name:
-                face_q, f_metrics = self._calculate_face_quality(item, target_name, pose)
-
-            # --- FINAL FORMULA ---
-            # Score = (Semantic * 0.85) + (Face * 0.1) + (Global * 0.05)
-            w = self.WEIGHTS
-
-            final_score = (semantic_sim * w["semantic"]) + (global_q * w["global_quality"])
-
-            if target_name:
-                final_score += (face_q * w["face_quality"])
-
-            # Store for Debugging / Frontend display
-            self.metrics[path] = {
-                "final_relevance": round(final_score, 4),
-                "semantic": round(semantic_sim, 3),
-                **g_metrics,
-                **f_metrics
-            }
-
-        return self._apply_mmr(lambda_param, top_k), self.metrics
-
-    def _apply_mmr(self, lambda_param: float, top_k: int) -> List[ImageAnalysisResult]:
-        """
-        Standard MMR for diversity.
-        """
-        num_candidates = len(self.results)
-        if num_candidates == 0: return []
-
-        # 1. Load Vectors & Scores
-        embeddings = np.array([c.semantic_vector for c in self.results])
-        c_tensor = torch.tensor(embeddings, dtype=torch.float32, device=self.device)
-
-        scores_list = [self.metrics[c.display_path]["final_relevance"] for c in self.results]
-        scores = torch.tensor(scores_list, dtype=torch.float32, device=self.device)
-
-        # 2. Normalize Scores to [0, 1] relative to this batch
-        # This is crucial so that '0.8' relevance compares meaningfully to '0.8' similarity
-        if num_candidates > 1:
-            s_min, s_max = torch.min(scores), torch.max(scores)
-            if s_max > s_min:
-                scores = (scores - s_min) / (s_max - s_min)
-
-        # 3. Similarity Matrix
-        c_norm = torch.nn.functional.normalize(c_tensor, p=2, dim=1)
-        sim_matrix = torch.mm(c_norm, c_norm.T)
-
-        # 4. Selection Loop
-        selected_indices = []
-        candidate_mask = torch.ones(num_candidates, dtype=torch.bool, device=self.device)
-        max_sim_to_selected = torch.zeros(num_candidates, device=self.device)
-
-        for i in range(min(top_k, num_candidates)):
-            # MMR = (Lambda * Relevance) - ((1-Lambda) * SimilarityPenalty)
-            mmr_vals = (lambda_param * scores) - ((1 - lambda_param) * max_sim_to_selected)
-            mmr_vals[~candidate_mask] = -float('inf')
-
-            best_idx = torch.argmax(mmr_vals).item()
-            selected_indices.append(best_idx)
-            candidate_mask[best_idx] = False
-
-            # Update similarities for next round
-            max_sim_to_selected = torch.max(max_sim_to_selected, sim_matrix[:, best_idx])
-
-            # Log rank
-            self.metrics[self.results[best_idx].display_path]["mmr_rank"] = i + 1
-
-        return [self.results[i] for i in selected_indices]

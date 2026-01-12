@@ -1,30 +1,56 @@
 import streamlit as st
 import os
-from PIL import Image
-from src.util.image_util import get_exif_timestamp, get_timestamp_from_heic
 from typing import Dict, List, Any
 from src.common.types import ImageAnalysisResult, FaceData
-from src.util.image_util import load_face_crop, calculate_face_dim
+from src.util.image_util import load_face_crop
+from src.util.logger import logger
 
-def render_photo_card(result: ImageAnalysisResult, metric: Dict[Any, Any] = None, context_label: str = ""):
+def toggle_selection(photo_id: str, session_id: str):
+    """
+    Stores a unique combination of (Photo + Session).
+    Allows the same photo to be 'relevant' for multiple different searches.
+    """
+    if "selected_pairs" not in st.session_state:
+        st.session_state.selected_pairs = set() # Set of tuples
+
+    # The unique key is now the PAIR
+    interaction_key = (photo_id, session_id)
+
+    if interaction_key in st.session_state.selected_pairs:
+        st.session_state.selected_pairs.remove(interaction_key)
+        # st.toast(f"↩️ Undo selection", icon="🗑️")
+    else:
+        st.session_state.selected_pairs.add(interaction_key)
+        # st.toast(f"✅ Saved match for this search", icon="⭐")
+
+@st.fragment
+def render_photo_card(result: ImageAnalysisResult, metric: Dict[Any, Any] = None, context_label: str = "", show_raw: bool = False, session_id: str = "default"):
     """
     Renders a single photo card with a collapsible Inspector.
 
     Args:
     """
-    skip_metric = False
     if not result:
         st.error("Results not found")
         return
 
-    if not metric:
-        # If this is not a search then we will skip printing
-        skip_metric = True
-
-
     display_path = result.display_path
     # 1. Render Image
     st.image(display_path, width="stretch")
+
+    is_selected = (result.photo_id, session_id) in st.session_state.get("selected_pairs", set())
+
+    btn_type = "primary" if not is_selected else "secondary"
+    btn_label = "🌟 Best Match" if not is_selected else "✅ Selected (Undo)"
+
+    st.button(
+        btn_label,
+        key=f"btn_{result.photo_id}_{session_id}", # Unique key per session
+        type=btn_type,
+        on_click=toggle_selection,
+        args=(result.photo_id, session_id),
+        use_container_width=True
+    )
 
     # 2. The Inspector
     with st.expander(f"🔍 Technical Analysis {context_label}"):
@@ -33,7 +59,7 @@ def render_photo_card(result: ImageAnalysisResult, metric: Dict[Any, Any] = None
         if metric:
             st.subheader("Ranking Breakdown")
             # Separate keys into groups to make them readable
-            semantic_keys = {"semantic", "mmr_rank"}
+            semantic_keys = {"semantic", "mmr_rank", "final_relevance"}
             # Everything else starting with 'g_' is global technical
             global_tech = {k: v for k, v in metric.items() if k.startswith("g_")}
             # Everything else starting with 'f_' is face technical
@@ -49,12 +75,20 @@ def render_photo_card(result: ImageAnalysisResult, metric: Dict[Any, Any] = None
                 st.caption("Global Quality Scores")
                 for k, v in global_tech.items():
                     st.write(f"**{k[2:].title()}:** {v}") # Strips 'g_'
+            if face_tech:
+                st.caption("Normalized Face Scores (For Search Target)")
+                scols = st.columns(len(face_tech))
+                for idx, (sk, sv) in enumerate(face_tech.items()):
+                    label = sk[2:].title()
+                    with scols[idx]:
+                        st.write(f"**{label}:** {sv:.2f}")
+
 
         st.divider()
 
         # --- SECTION B: FACES ---
         faces: List[FaceData] = result.faces or []
-        if faces:
+        if show_raw and faces:
             st.subheader(f"👥 Detected {len(faces)} Faces")
             for i, face in enumerate(faces):
                 fcol1, fcol2 = st.columns([1, 2])

@@ -55,6 +55,9 @@ class ImageAnalysisResult:
 
     # Lazy fields (None until hydrated)
     timestamp: Optional[str] = None
+    month: Optional[int] = None
+    # Morning, Evening, Night.....
+    time_period: Optional[str] = None
     semantic_vector: Optional[np.ndarray] = None
     original_width: Optional[int] = None
     original_height: Optional[int] = None
