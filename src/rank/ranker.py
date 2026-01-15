@@ -6,6 +6,7 @@ from src.pose.pose import Pose
 from src.util.logger import logger
 from .base import BaseRankingStrategy
 from .heuristic_ranker import HeuristicStrategy
+from src.rank.rank_metrics import PictureRankMetrics
 
 class SearchResultRanker:
     def __init__(self, strategy: Optional[BaseRankingStrategy] = None):
@@ -25,11 +26,11 @@ class SearchResultRanker:
         lambda_param: float = 0.6,
         top_k: int = 50,
         pose: Optional[Pose] = None
-    ) -> Tuple[List[ImageAnalysisResult], Dict[str, Any]]:
+    ) -> Tuple[List[ImageAnalysisResult], Dict[str, Any], Optional[Dict[str, Any]]]:
 
         if not results:
             logger.error(f"No results to rank. Returning empty list.")
-            return [], {}
+            return [], {}, None
 
         scored_candidates = self.strategy.score_candidates(
             results, semantic_scores, target_name, pose
@@ -46,10 +47,13 @@ class SearchResultRanker:
             x[0].display_path: x[2] for x in scored_candidates
         }
 
+        photo_rank_metrics: Dict[str, Any] = {
+            x[0].display_path: x[3] for x in scored_candidates
+        }
 
         final_results = self._apply_mmr(items, scores, lambda_param, top_k, all_metrics)
 
-        return final_results, all_metrics
+        return final_results, all_metrics, photo_rank_metrics
 
     def _apply_mmr(
         self,

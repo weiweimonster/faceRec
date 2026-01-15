@@ -2,8 +2,9 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Tuple, Optional
 from src.common.types import ImageAnalysisResult
 from src.pose.pose import Pose
+from .rank_metrics import PictureRankMetrics
 
-ScoredCandidate = Tuple[ImageAnalysisResult, float, Dict[str, Any]]
+ScoredCandidate = Tuple[ImageAnalysisResult, float, Dict[str, Any], Optional[PictureRankMetrics]]
 
 class BaseRankingStrategy(ABC):
     """

@@ -11,7 +11,7 @@ from .base import BaseRankingStrategy, ScoredCandidate
 from src.util.logger import logger
 
 class XGBoostRanker(BaseRankingStrategy):
-    def __init__(self, model_path="model.json"):
+    def __init__(self, model_path="ltr_model.json"):
         self.model = None
         self.feature_cols = ["g_contrast", "f_conf", "meta_year"]
         self.feature_cols_map = {
@@ -47,7 +47,7 @@ class XGBoostRanker(BaseRankingStrategy):
 
         if not self.model or not results:
             logger.error("No model initialized")
-            return [(r, semantic_scores.get(r.display_path, 0.0), {}) for r in results]
+            return [(r, semantic_scores.get(r.display_path, 0.0), {}, None) for r in results]
 
         logger.info(f"Extracting features from {len(results)}")
         # Extract features
@@ -88,7 +88,7 @@ class XGBoostRanker(BaseRankingStrategy):
         for i, item in enumerate(results):
             score_val = float(scores[i])
             metrics = {"xgboost_score": round(score_val, 4)}
-            scored_items.append((item, score_val, metrics))
+            scored_items.append((item, score_val, metrics, None))
 
         return scored_items
 
