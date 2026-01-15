@@ -12,4 +12,4 @@ delete_notebooks/
 src/debug/
 logs/
 src/db/update*
-*.json
+models/
