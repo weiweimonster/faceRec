@@ -45,6 +45,7 @@ def save_feedback_batch(db_manager: DatabaseManager):
     # 2. Get Rich History (Full Objects)
     history_map = st.session_state.get("search_results_objects", {})
     history_metrics = st.session_state.get("search_metrics_map", {})
+    history_photo_rank_metrics = st.session_state.get("search_photo_rank_metrics_map", {})
 
     if not selected_pairs and not history_map:
         st.sidebar.warning("No data to save.")
@@ -66,6 +67,8 @@ def save_feedback_batch(db_manager: DatabaseManager):
             # This returns List[ImageAnalysisResult]
             results_list = history_map.get(session_id, [])
             metrics_map = history_metrics.get(session_id, {})
+            photo_rank_metrics_map = history_photo_rank_metrics.get(session_id, {})
+            # logger.info(str(photo_rank_metrics_map))
 
             if not results_list:
                 continue
@@ -90,12 +93,15 @@ def save_feedback_batch(db_manager: DatabaseManager):
 
                 label = 1 if res_obj.photo_id in positive_set else 0
                 specific_scores = metrics_map.get(res_obj.display_path, {})
+                specific_photo_rank_metrics = photo_rank_metrics_map.get(res_obj.display_path, {})
+                logger.info(str(specific_photo_rank_metrics))
 
                 db_manager.log_interaction_from_object(
                     result=res_obj,
                     session_id=session_id,
                     label=label,
-                    dynamic_scores=specific_scores
+                    dynamic_scores=specific_scores,
+                    rank_metrics=specific_photo_rank_metrics,
                 )
 
                 if label == 1: count_pos += 1

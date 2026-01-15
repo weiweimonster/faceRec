@@ -111,7 +111,21 @@ def get_exif_iso(image_path: str) -> int | None:
     except:
         return val
 
+def parse_date_components(date_str: str) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+    """
+    Parses a timestamp string like '2024-01-11 18:30:00'
+    and returns (Year, Month, Day).
+    """
+    if not date_str:
+        return None, None, None
 
+    try:
+        # Match the format output by your previous function
+        dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+        return dt.year, dt.month, dt.day
+    except ValueError:
+        # Handle cases where the string might be malformed or empty
+        return None, None, None
 
 def get_exif_timestamp(image_path: str) -> str | None:
     """

@@ -1,7 +1,7 @@
 from __future__ import annotations
 import clip
 import torch
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 from src.common.types import ImageAnalysisResult
 from src.db.storage import DatabaseManager
@@ -10,6 +10,7 @@ from src.util.logger import logger
 from src.rank.heuristic_ranker import HeuristicStrategy
 from src.rank.ranker import SearchResultRanker
 from src.rank.xgboost_ranker import XGBoostRanker
+from src.rank.rank_metrics import PictureRankMetrics
 
 class SearchEngine:
     def __init__(self, db: DatabaseManager):
@@ -34,13 +35,13 @@ class SearchEngine:
         else:
             logger.error(f"Invalid strategy type: {strategy_type}, keeping current settings")
 
-    def searchv2(self, filters: SearchFilters, limit: int = 20, rank: bool = True) -> Tuple[List[ImageAnalysisResult], Dict[str, Any]]:
+    def searchv2(self, filters: SearchFilters, limit: int = 20, rank: bool = True) -> Tuple[List[ImageAnalysisResult], Dict[str, Any], Dict[str, Any]]:
         """
         Search pipeline: SQL candidates -> CLIP Encoding -> Chroma Similarity -> Hydration -> Ranker.
         """
         if filters is None:
             logger.error("No filters found. Returning empty.")
-            return [], {}
+            return [], {}, {}
 
         # 1. SQL Candidate Filtering
         # Filters by People, Year, and Pose to narrow the search space
@@ -51,14 +52,14 @@ class SearchEngine:
         # If filters were provided but no candidates found, exit early
         if not candidate_paths and (filters.people or filters.pose or filters.year):
             logger.info("No candidates found matching SQL filters. Returning empty.")
-            return [], {}
+            return [], {}, {}
 
         # 2. Text Encoding (Logic resides in SearchEngine)
         if filters.semantic_query:
             query_vector = self._encode_text(filters.semantic_query)
         else:
             logger.error("No semantic query found. Returning empty.")
-            return [], {}
+            return [], {}, {}
 
         # 3. Vector Similarity Search
         # Note: get_semantic_candidates returns a Dict[path, score]
@@ -70,7 +71,7 @@ class SearchEngine:
         )
 
         if not semantic_data:
-            return [], {}
+            return [], {}, {}
 
         # 4. Metadata Hydration
         # We need the full ImageAnalysisResult objects for the Ranker to work
@@ -96,12 +97,12 @@ class SearchEngine:
                 # A. Populate the Dict (for Ranker's lookup if needed)
                 semantic_scores_only[res.display_path] = score
 
-                # B. INJECT VECTOR (Fixes the MMR Crash)
+                # B. INJECT VECTOR
                 res.semantic_vector = vector
 
         # rank() returns (List[ImageAnalysisResult], self.metrics)
         # It also internalizes the MMR logic we discussed
-        final_ranked_results, metrics = self.ranker.process(
+        final_ranked_results, metrics, photo_rank_metrics = self.ranker.process(
             results=hydrated_results,
             semantic_scores=semantic_scores_only,
             target_name=target_person,
@@ -111,4 +112,4 @@ class SearchEngine:
         )
 
         logger.info(f"✅ Search complete. Returning top {len(final_ranked_results)} results.")
-        return final_ranked_results, metrics
+        return final_ranked_results, metrics, photo_rank_metrics

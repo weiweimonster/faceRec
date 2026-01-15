@@ -18,10 +18,8 @@ def toggle_selection(photo_id: str, session_id: str):
 
     if interaction_key in st.session_state.selected_pairs:
         st.session_state.selected_pairs.remove(interaction_key)
-        # st.toast(f"↩️ Undo selection", icon="🗑️")
     else:
         st.session_state.selected_pairs.add(interaction_key)
-        # st.toast(f"✅ Saved match for this search", icon="⭐")
 
 @st.fragment
 def render_photo_card(result: ImageAnalysisResult, metric: Dict[Any, Any] = None, context_label: str = "", show_raw: bool = False, session_id: str = "default"):

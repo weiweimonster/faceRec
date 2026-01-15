@@ -39,7 +39,7 @@ def render_search_page(mode="search", show_raw=False):
                     st.json(search_filter.to_dict())
 
         # 2. Execution
-        results, metrics = engine.searchv2(search_filter, limit=100)
+        results, metrics, photo_rank_metrics = engine.searchv2(search_filter, limit=100)
         st.markdown(f"**Found {len(results)} results for:** `{query}`")
 
         # 3. Store History (for LTR)
@@ -50,6 +50,10 @@ def render_search_page(mode="search", show_raw=False):
         if "search_metrics_map" not in st.session_state:
             st.session_state.search_metrics_map = {}
         st.session_state.search_metrics_map[current_sess_id] = metrics
+
+        if "search_photo_rank_metrics_map" not in st.session_state:
+            st.session_state.search_photo_rank_metrics_map = {}
+        st.session_state.search_photo_rank_metrics_map[current_sess_id] = photo_rank_metrics
 
         # 4. Render Grid
         if results:

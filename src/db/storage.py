@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pickle
 import sqlite3
 import chromadb
 import numpy as np
@@ -10,6 +11,7 @@ from typing import List, Optional, Any, Dict, Tuple
 from src.util.logger import logger
 from src.ingestion.processor import FaceData, ImageAnalysisResult
 from src.util.search_config import SearchFilters
+from src.rank.rank_metrics import PictureRankMetrics
 
 
 class DatabaseManager:
@@ -67,6 +69,7 @@ class DatabaseManager:
                                 photo_id               TEXT,
                                 label                  INTEGER  DEFAULT 0, -- 1 = Positive (Click), 0 = Negative (Skip)
                                 features_snapshot_json TEXT,               -- The exact features used for ranking
+                                rank_metrics_blob      BLOB,
                                 timestamp              DATETIME DEFAULT CURRENT_TIMESTAMP,
                                 FOREIGN KEY (session_id) REFERENCES search_history (session_id),
                                 FOREIGN KEY (photo_id) REFERENCES photos (photo_id)
@@ -152,7 +155,7 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to log search query: {e}")
 
-    def log_interaction_from_object(self, result: ImageAnalysisResult, session_id: str, label: int = 1, dynamic_scores: Dict[str, float] = None):
+    def log_interaction_from_object(self, result: ImageAnalysisResult, session_id: str, label: int = 1, dynamic_scores: Dict[str, float] = None, rank_metrics: Optional[PictureRankMetrics] = None):
         """
         Saves a training example using the IN-MEMORY object (ImageAnalysisResult).
         Avoids SQL re-reads and handles 'Target Face' logic in Python.
@@ -160,6 +163,7 @@ class DatabaseManager:
         try:
             scores = dynamic_scores or {}
 
+            photo_metrics_blob = pickle.dumps(rank_metrics) if rank_metrics else None
             # 1. Extract Global Metrics (From the Object)
             # We use getattr/defaults to be safe against missing lazy-loaded fields
             features = {
@@ -230,9 +234,9 @@ class DatabaseManager:
 
             # 5. Save Snapshot
             self.cursor.execute("""
-                                INSERT INTO search_interactions (session_id, photo_id, label, features_snapshot_json)
-                                VALUES (?, ?, ?, ?)
-                                """, (session_id, result.photo_id, label, json.dumps(features)))
+                                INSERT INTO search_interactions (session_id, photo_id, label, features_snapshot_json, rank_metrics_blob)
+                                VALUES (?, ?, ?, ?, ?)
+                                """, (session_id, result.photo_id, label, json.dumps(features), photo_metrics_blob))
 
             self.conn.commit()
 
