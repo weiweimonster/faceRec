@@ -12,6 +12,8 @@ from src.util.image_util import calculate_shot_type, calculate_face_quality, com
 # so the test doesn't crash if these files aren't in the python path during testing.
 sys.modules['src.pose.pose_extractor'] = MagicMock()
 sys.modules['src.util.image_util'] = MagicMock()
+sys.modules['src.model.florence'] = MagicMock()
+sys.modules['src.model.text_embedder'] = MagicMock()
 
 @pytest.fixture
 def mock_dependencies():
@@ -29,6 +31,8 @@ def mock_dependencies():
             patch('src.ingestion.processor.cv2') as mock_cv2, \
             patch('src.ingestion.processor.torch') as mock_torch, \
             patch('src.ingestion.processor.AestheticPredictor') as mock_aesthetic_cls, \
+            patch('src.ingestion.processor.VisionScanner') as mock_vision_cls, \
+            patch('src.ingestion.processor.TextEmbedder') as mock_embedder_cls, \
             patch('src.ingestion.processor.get_exif_timestamp') as mock_exif_ts, \
             patch('src.ingestion.processor.get_disk_timestamp') as mock_disk_ts, \
             patch('src.ingestion.processor.get_exif_iso') as mock_iso, \
@@ -58,7 +62,16 @@ def mock_dependencies():
         mock_aesthetic_instance = mock_aesthetic_cls.return_value
         mock_aesthetic_instance.return_value.item.return_value = 7.5
 
-        # 5. Defaults for Utils
+        # 5. Setup Vision Scanner (NEW)
+        mock_vision_instance = mock_vision_cls.return_value
+        mock_vision_instance.extract_caption.return_value = "A detailed caption of a test image"
+
+        # 6. Setup Text Embedder (NEW)
+        mock_embedder_instance = mock_embedder_cls.return_value
+        # Mocking a 5-dimension vector for testing
+        mock_embedder_instance.embed.return_value = [0.1, 0.2, 0.3, 0.4, 0.5]
+
+        # 7. Defaults for Utils
         mock_too_small.return_value = False
         mock_exif_ts.return_value = datetime(2023, 1, 1, 12, 0, 0) # Default EXIF TS
         mock_disk_ts.return_value = datetime(2024, 1, 1, 12, 0, 0) # Default Disk TS
@@ -69,6 +82,8 @@ def mock_dependencies():
             "face_app": instance_fa,
             "clip_model": mock_clip_model,
             "pose": mock_pose_extractor,
+            "vision": mock_vision_instance,
+            "embedder": mock_embedder_instance,
             "exif_ts": mock_exif_ts,
             "disk_ts": mock_disk_ts,
             "iso": mock_iso,
@@ -156,6 +171,13 @@ def test_process_image_happy_path(extractor, mock_dependencies, sample_image, mo
     # Check Semantic Vector
     assert result.semantic_vector.shape == (3,)
 
+    # Check the caption
+    assert result.caption == "A detailed caption of a test image"
+    assert result.caption_vector == [0.1, 0.2, 0.3, 0.4, 0.5]
+
+    mock_dependencies["vision"].extract_caption.assert_called_with("test.jpg")
+    mock_dependencies["embedder"].embed.assert_called_with("A detailed caption of a test image")
+
 def test_full_flow_happy_path(extractor, mock_dependencies, sample_image, mock_face_obj):
     """
     Verifies the complete flow including:
@@ -186,6 +208,13 @@ def test_full_flow_happy_path(extractor, mock_dependencies, sample_image, mock_f
     # Check Face Data injection
     assert result.faces[0].yaw == 10.0  # From Pose Extractor
     assert result.faces[0].pitch == 20.0
+
+    # Check the caption
+    assert result.caption == "A detailed caption of a test image"
+    assert result.caption_vector == [0.1, 0.2, 0.3, 0.4, 0.5]
+
+    mock_dependencies["vision"].extract_caption.assert_called_with("test.jpg")
+    mock_dependencies["embedder"].embed.assert_called_with("A detailed caption of a test image")
 
 def test_timestamp_fallback_logic(extractor, mock_dependencies, sample_image):
     """
@@ -395,3 +424,34 @@ def test_process_image_returns_valid_dataclass(extractor, mock_dependencies, sam
     assert face.shot_type != ""  # Should be calculated
 
     assert result.semantic_vector.shape == (3,)
+
+def test_captioning_failure_handling(extractor, mock_dependencies, sample_image):
+    """
+    Test that if the vision model returns an empty string (failure case),
+    the embedder handles it safely and we still get a valid result object.
+    """
+    # Setup standard mocks
+    mock_dependencies["cv2"].imread.return_value = sample_image
+    mock_dependencies["cv2"].cvtColor.return_value = sample_image
+    mock_dependencies["face_app"].get.return_value = []
+
+    # Mock CLIP
+    mock_tensor = MagicMock()
+    mock_tensor.norm.return_value = 1.0
+    mock_tensor.cpu().numpy.return_value = np.zeros((1, 512))
+    mock_dependencies["clip_model"].encode_image.return_value = mock_tensor
+
+    # --- 1. SIMULATE FAILURE ---
+    # Vision model returns empty string
+    mock_dependencies["vision"].extract_caption.return_value = ""
+
+    # Embedder returns None when given empty string (assuming your Embedder logic does this)
+    mock_dependencies["embedder"].embed.return_value = None
+
+    # Run
+    result = extractor.process_image("test.jpg", "raw.jpg")
+
+    # Assertions
+    assert result is not None
+    assert result.caption == ""
+    assert result.caption_vector is None  # Should be None, not crash

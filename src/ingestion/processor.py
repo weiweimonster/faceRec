@@ -12,6 +12,8 @@ from src.util.image_util import is_face_too_small, calculate_face_quality, calcu
 from src.common.types import FaceData, ImageAnalysisResult
 from src.util.logger import logger
 from src.model.aesthetic_predictor import AestheticPredictor
+from src.model.text_embedder import TextEmbedder
+from src.model.florence import VisionScanner
 
 class FeatureExtractor:
     """
@@ -31,6 +33,9 @@ class FeatureExtractor:
             model_path="sac_logos_ava1-l14-linearMSE.pth",
             device=self.device,
         )
+
+        self.vision_scanner = VisionScanner()
+        self.text_embedder = TextEmbedder()
 
     def process_image(self, image_path: str, raw_path: str) -> ImageAnalysisResult:
         try:
@@ -91,6 +96,8 @@ class FeatureExtractor:
                 # TODO: Write test cases to ensure that the data types are matching
                 aesthetic_score = self.aesthetic_predictor(image_features.to(self.device).float()).item()
 
+            caption = self.vision_scanner.extract_caption(image_path)
+            caption_vector = self.text_embedder.embed(caption)
 
             timestamp = get_exif_timestamp(image_path)
             if not timestamp:
@@ -125,6 +132,8 @@ class FeatureExtractor:
                 global_blur=global_stats["global_blur"],
                 global_brightness=global_stats["global_brightness"],
                 global_contrast=global_stats["global_contrast"],
+                caption=caption,
+                caption_vector=caption_vector
             )
         except Exception as e:
             raise e
