@@ -3,7 +3,6 @@ from typing import List, Dict, Any, Tuple, Optional
 from src.common.types import ImageAnalysisResult, FaceData
 from src.pose.pose import Pose
 from .base import BaseRankingStrategy, RankingResult
-from src.util.image_util import parse_date_components
 from src.features.registry import get_normalization_bounds
 from src.features.container import FeatureExtractor
 from src.util.logger import logger

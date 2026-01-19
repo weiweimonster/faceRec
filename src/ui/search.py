@@ -22,7 +22,8 @@ def render_search_page(mode="search", show_raw=False):
         # 1. GPT Parsing
         search_filter, message = gpt._get_agent_response(query)
         if search_filter:
-            db.log_search_query(current_sess_id, query, search_filter)
+            # Log the search query with the active ranking model
+            db.log_search_query(current_sess_id, query, search_filter, ranking_model=engine.current_strategy)
             st.success(f"✅ Agent Parsed: {search_filter}")
             with st.expander("🔍 See Raw Arguments", expanded=True):
                 c1, c2 = st.columns(2)
@@ -48,6 +49,10 @@ def render_search_page(mode="search", show_raw=False):
             st.session_state.search_ranking_results = {}
         st.session_state.search_ranking_results[current_sess_id] = ranking_result
 
+        # 3.1 Log impressions for all shown results
+        impressions = [(r.photo_id, i) for i, r in enumerate(ranking_result.ranked_results)]
+        db.log_impressions(current_sess_id, impressions)
+
         # 4. Render Grid
         if ranking_result.ranked_results:
             cols = st.columns(3)
@@ -59,7 +64,8 @@ def render_search_page(mode="search", show_raw=False):
                         display_metrics,
                         context_label=f"#{i+1}",
                         show_raw=show_raw,
-                        session_id=current_sess_id
+                        session_id=current_sess_id,
+                        position=i
                     )
         else:
             st.warning("No photos found.")

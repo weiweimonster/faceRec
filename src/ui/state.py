@@ -15,7 +15,7 @@ def init_session_state():
     if "search_session_id" not in st.session_state:
         st.session_state.search_session_id = str(uuid.uuid4())
     if "selected_pairs" not in st.session_state:
-        st.session_state.selected_pairs = set()
+        st.session_state.selected_pairs = {}  # Dict of {(photo_id, session_id): position}
 
 @st.cache_resource
 def get_db():
@@ -38,10 +38,10 @@ def load_face_crop_from_str_streamlit(image_path: str, bbox_str: str):
 def save_feedback_batch(db_manager: DatabaseManager):
     """
     Commits selections using 'Max Rank Cutoff' logic.
-    Passes full ImageAnalysisResult objects to the DB manager.
+    Passes full ImageAnalysisResult objects to the DB manager with position info.
     """
-    # 1. Get Selections
-    selected_pairs = st.session_state.get("selected_pairs", set())
+    # 1. Get Selections (now a dict mapping (photo_id, session_id) -> position)
+    selected_pairs = st.session_state.get("selected_pairs", {})
 
     if not selected_pairs:
         st.warning("No selections to save")
@@ -54,22 +54,22 @@ def save_feedback_batch(db_manager: DatabaseManager):
         st.sidebar.warning("No data to save.")
         return
 
-    # Group clicks by session for processing
+    # Group clicks by session for processing, storing {photo_id: position}
     selections_by_session = {}
-    for pid, sid in selected_pairs:
+    for (pid, sid), position in selected_pairs.items():
         if sid not in selections_by_session:
-            selections_by_session[sid] = set()
-        selections_by_session[sid].add(pid)
+            selections_by_session[sid] = {}
+        selections_by_session[sid][pid] = position
 
     count_pos = 0
     count_neg = 0
 
     with st.spinner("Saving training data..."):
-        for session_id, positive_set in selections_by_session.items():
+        for session_id, positive_map in selections_by_session.items():
+            positive_set = set(positive_map.keys())
 
             # This returns List[ImageAnalysisResult]
             ranking_results: RankingResult = history_rank_results.get(session_id, [])
-            # logger.info(str(photo_rank_metrics_map))
 
             if not ranking_results:
                 continue
@@ -93,13 +93,15 @@ def save_feedback_batch(db_manager: DatabaseManager):
                 res_obj = ranking_results.ranked_results[i]
 
                 label = 1 if res_obj.photo_id in positive_set else 0
+                # Get position from positive_map if it's a click, otherwise use the loop index
+                position = positive_map.get(res_obj.photo_id, i) if label == 1 else i
                 features = ranking_results.training_features.get(res_obj.display_path, {})
-                db_manager.log_interaction_from_features(res_obj, session_id, features, label)
+                db_manager.log_interaction_from_features(res_obj, session_id, features, label, position=position)
 
                 if label == 1: count_pos += 1
                 else: count_neg += 1
 
     # Cleanup
-    st.session_state.selected_pairs = set()
+    st.session_state.selected_pairs = {}
     st.toast(f"✅ Saved {count_pos} Positives & {count_neg} Negatives", icon="💾")
     st.sidebar.success(f"Saved {count_pos} Pos / {count_neg} Neg")

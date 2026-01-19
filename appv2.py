@@ -20,3 +20,10 @@ if app_mode == "🔎 Search":
 # ==========================================
 elif app_mode == "👥 Labeling":
     render_labeling_page(show_raw=show_raw_db)
+
+# ==========================================
+# TAB 3: ANALYTICS DASHBOARD
+# ==========================================
+elif app_mode == "📊 Analytics":
+    from src.ui.analytics import render_analytics_page
+    render_analytics_page()

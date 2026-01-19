@@ -51,8 +51,9 @@ class DatabaseManager:
     def init_ltr_tables(self):
         """
         Creates tables for Learning-to-Rank data collection.
-        1. search_history: Maps session_id -> Query/Intent
-        2. search_interactions: Maps session_id + photo_id -> Label + Feature Snapshot
+        1. search_history: Maps session_id -> Query/Intent + ranking model used
+        2. search_interactions: Maps session_id + photo_id -> Label + Feature Snapshot + position
+        3. search_impressions: Tracks all photos shown in search results
         """
         # Table 1: The Search Session (Context)
         self.cursor.execute("""
@@ -61,10 +62,12 @@ class DatabaseManager:
                                 session_id          TEXT PRIMARY KEY,
                                 raw_query           TEXT,
                                 parsed_filters_json TEXT,
+                                ranking_model       TEXT DEFAULT 'heuristic',
                                 timestamp           DATETIME DEFAULT CURRENT_TIMESTAMP
                             )
                             """)
 
+        # Table 2: User interactions (clicks/selections)
         self.cursor.execute("""
                             CREATE TABLE IF NOT EXISTS search_interactions
                             (
@@ -72,13 +75,53 @@ class DatabaseManager:
                                 session_id     TEXT,
                                 photo_id       TEXT,
                                 label          INTEGER  DEFAULT 0,
+                                position       INTEGER  DEFAULT -1,
                                 features_json  TEXT,
                                 timestamp      DATETIME DEFAULT CURRENT_TIMESTAMP,
                                 FOREIGN KEY (session_id) REFERENCES search_history (session_id),
                                 FOREIGN KEY (photo_id) REFERENCES photos (photo_id)
                             )
                             """)
+
+        # Table 3: Impressions (all photos shown in search results)
+        self.cursor.execute("""
+                            CREATE TABLE IF NOT EXISTS search_impressions
+                            (
+                                impression_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                session_id    TEXT NOT NULL,
+                                photo_id      TEXT NOT NULL,
+                                position      INTEGER NOT NULL,
+                                timestamp     DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                FOREIGN KEY (session_id) REFERENCES search_history (session_id),
+                                UNIQUE(session_id, photo_id)
+                            )
+                            """)
+
+        # Create indices for faster lookups
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_imp_session ON search_impressions(session_id);")
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_imp_timestamp ON search_impressions(timestamp);")
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_interactions_session ON search_interactions(session_id);")
+
+        # Add new columns to existing tables if they don't exist (for migration)
+        self._migrate_ltr_tables()
+
         self.conn.commit()
+
+    def _migrate_ltr_tables(self):
+        """Add new columns to existing tables for backwards compatibility."""
+        # Check and add ranking_model to search_history
+        self.cursor.execute("PRAGMA table_info(search_history)")
+        columns = [col[1] for col in self.cursor.fetchall()]
+        if 'ranking_model' not in columns:
+            self.cursor.execute("ALTER TABLE search_history ADD COLUMN ranking_model TEXT DEFAULT 'heuristic'")
+            logger.info("Migrated search_history: added ranking_model column")
+
+        # Check and add position to search_interactions
+        self.cursor.execute("PRAGMA table_info(search_interactions)")
+        columns = [col[1] for col in self.cursor.fetchall()]
+        if 'position' not in columns:
+            self.cursor.execute("ALTER TABLE search_interactions ADD COLUMN position INTEGER DEFAULT -1")
+            logger.info("Migrated search_interactions: added position column")
 
     def _init_sql_tables(self):
         """
@@ -145,25 +188,54 @@ class DatabaseManager:
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_time_meta ON photos(month, time_period);")
 
         self.conn.commit()
-    def log_search_query(self, session_id: str, query: str, filters: Any):
-        """Saves the context (intent) of the search."""
+    def log_search_query(self, session_id: str, query: str, filters: Any, ranking_model: str = "heuristic"):
+        """Saves the context (intent) of the search including the ranking model used."""
         try:
             filters_dict = filters.to_dict() if hasattr(filters, "to_dict") else filters
             self.cursor.execute("""
-                    INSERT OR REPLACE INTO search_history (session_id, raw_query, parsed_filters_json)
-                    VALUES (?, ?, ?)
-                """, (session_id, query, json.dumps(filters_dict)))
+                    INSERT OR REPLACE INTO search_history (session_id, raw_query, parsed_filters_json, ranking_model)
+                    VALUES (?, ?, ?, ?)
+                """, (session_id, query, json.dumps(filters_dict), ranking_model))
             self.conn.commit()
-            logger.info(f"📝 Logged Session: {session_id[:8]}... | Query: {query}")
+            logger.info(f"📝 Logged Session: {session_id[:8]}... | Query: {query} | Model: {ranking_model}")
         except Exception as e:
             logger.error(f"Failed to log search query: {e}")
+
+    def log_impressions(self, session_id: str, photo_ids_with_positions: List[Tuple[str, int]]) -> int:
+        """
+        Log all photos shown in search results with their positions.
+
+        Args:
+            session_id: The search session ID
+            photo_ids_with_positions: List of (photo_id, position) tuples
+
+        Returns:
+            Number of impressions logged
+        """
+        if not photo_ids_with_positions:
+            return 0
+
+        try:
+            # Use INSERT OR IGNORE to handle duplicate impressions gracefully
+            self.cursor.executemany("""
+                INSERT OR IGNORE INTO search_impressions (session_id, photo_id, position)
+                VALUES (?, ?, ?)
+            """, [(session_id, photo_id, pos) for photo_id, pos in photo_ids_with_positions])
+            self.conn.commit()
+            count = self.cursor.rowcount
+            logger.info(f"📊 Logged {count} impressions for session {session_id[:8]}...")
+            return count
+        except Exception as e:
+            logger.error(f"Failed to log impressions: {e}")
+            return 0
 
     def log_interaction_from_features(
             self,
             result: ImageAnalysisResult,
             session_id: str,
             features: Dict[str, float],
-            label: int = 1
+            label: int = 1,
+            position: int = -1
     ):
         """
         Log user interaction with pre-extracted features.
@@ -173,6 +245,7 @@ class DatabaseManager:
             session_id: Unique search session ID
             features: Pre-extracted feature dict from ranker
             label: 1 for click (positive), 0 for skip (negative)
+            position: Position in search results (0-indexed), -1 if unknown
 
         Example:
             features = {
@@ -182,16 +255,16 @@ class DatabaseManager:
                 "f_conf": 0.95,
                 ...
             }
-            db.log_interaction_from_features(result, session_id, features, label=1)
+            db.log_interaction_from_features(result, session_id, features, label=1, position=3)
         """
         try:
             self.cursor.execute("""
-                                INSERT INTO search_interactions (session_id, photo_id, label, features_json)
-                                VALUES (?, ?, ?, ?)
-                                """, (session_id, result.photo_id, label, json.dumps(features)))
+                                INSERT INTO search_interactions (session_id, photo_id, label, position, features_json)
+                                VALUES (?, ?, ?, ?, ?)
+                                """, (session_id, result.photo_id, label, position, json.dumps(features)))
 
             self.conn.commit()
-            logger.info(f"✅ Logged {'click' if label else 'skip'} for {result.photo_id} ({len(features)} features)")
+            logger.info(f"✅ Logged {'click' if label else 'skip'} for {result.photo_id} at position {position} ({len(features)} features)")
 
         except Exception as e:
             logger.error(f"Failed to log interaction for {result.photo_id}: {e}")
@@ -586,4 +659,260 @@ class DatabaseManager:
             self.cursor.execute("UPDATE people SET name = ? WHERE person_id = ?", (new_name, old_pid))
             self.conn.commit()
             return f"Renamed ID {old_pid} to {new_name}"
+
+    # =========================================================================
+    # CTR & Analytics Methods
+    # =========================================================================
+
+    def get_overall_ctr(self, start_date: str = None, end_date: str = None) -> Dict[str, Any]:
+        """
+        Get overall CTR metrics for a date range.
+
+        Args:
+            start_date: Optional start date (YYYY-MM-DD format)
+            end_date: Optional end date (YYYY-MM-DD format)
+
+        Returns:
+            Dict with impressions, clicks, ctr, and unique_sessions
+        """
+        try:
+            # Build date filter
+            date_filter = ""
+            params = []
+            if start_date:
+                date_filter += " AND i.timestamp >= ?"
+                params.append(start_date)
+            if end_date:
+                date_filter += " AND i.timestamp <= ?"
+                params.append(end_date + " 23:59:59")
+
+            # Count impressions
+            self.cursor.execute(f"""
+                SELECT COUNT(*) FROM search_impressions i
+                WHERE 1=1 {date_filter}
+            """, params)
+            impressions = self.cursor.fetchone()[0] or 0
+
+            # Count clicks (label=1 interactions)
+            self.cursor.execute(f"""
+                SELECT COUNT(*) FROM search_interactions si
+                WHERE si.label = 1 {date_filter.replace('i.', 'si.')}
+            """, params)
+            clicks = self.cursor.fetchone()[0] or 0
+
+            # Count unique sessions
+            self.cursor.execute(f"""
+                SELECT COUNT(DISTINCT session_id) FROM search_impressions i
+                WHERE 1=1 {date_filter}
+            """, params)
+            unique_sessions = self.cursor.fetchone()[0] or 0
+
+            ctr = (clicks / impressions * 100) if impressions > 0 else 0.0
+
+            return {
+                "impressions": impressions,
+                "clicks": clicks,
+                "ctr": round(ctr, 2),
+                "unique_sessions": unique_sessions
+            }
+        except Exception as e:
+            logger.error(f"Failed to get overall CTR: {e}")
+            return {"impressions": 0, "clicks": 0, "ctr": 0.0, "unique_sessions": 0}
+
+    def get_ctr_by_model(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get CTR breakdown per ranking model.
+
+        Returns:
+            Dict mapping model name to {sessions, impressions, clicks, ctr}
+        """
+        try:
+            query = """
+                SELECT
+                    sh.ranking_model,
+                    COUNT(DISTINCT sh.session_id) as sessions,
+                    COUNT(DISTINCT si.impression_id) as impressions,
+                    SUM(CASE WHEN sint.label = 1 THEN 1 ELSE 0 END) as clicks
+                FROM search_history sh
+                LEFT JOIN search_impressions si ON sh.session_id = si.session_id
+                LEFT JOIN search_interactions sint ON sh.session_id = sint.session_id
+                GROUP BY sh.ranking_model
+            """
+            self.cursor.execute(query)
+            rows = self.cursor.fetchall()
+
+            results = {}
+            for row in rows:
+                model = row[0] or "unknown"
+                sessions = row[1] or 0
+                impressions = row[2] or 0
+                clicks = row[3] or 0
+                ctr = (clicks / impressions * 100) if impressions > 0 else 0.0
+
+                results[model] = {
+                    "sessions": sessions,
+                    "impressions": impressions,
+                    "clicks": clicks,
+                    "ctr": round(ctr, 2)
+                }
+
+            return results
+        except Exception as e:
+            logger.error(f"Failed to get CTR by model: {e}")
+            return {}
+
+    def get_ctr_by_date(self, start_date: str = None, end_date: str = None) -> List[Dict[str, Any]]:
+        """
+        Get daily CTR for trend charts.
+
+        Args:
+            start_date: Optional start date (YYYY-MM-DD format)
+            end_date: Optional end date (YYYY-MM-DD format)
+
+        Returns:
+            List of dicts with date, model, impressions, clicks, ctr
+        """
+        try:
+            date_filter = ""
+            params = []
+            if start_date:
+                date_filter += " AND si.timestamp >= ?"
+                params.append(start_date)
+            if end_date:
+                date_filter += " AND si.timestamp <= ?"
+                params.append(end_date + " 23:59:59")
+
+            query = f"""
+                SELECT
+                    DATE(si.timestamp) as date,
+                    sh.ranking_model,
+                    COUNT(DISTINCT si.impression_id) as impressions,
+                    SUM(CASE WHEN sint.label = 1 THEN 1 ELSE 0 END) as clicks
+                FROM search_impressions si
+                JOIN search_history sh ON si.session_id = sh.session_id
+                LEFT JOIN search_interactions sint ON si.session_id = sint.session_id AND si.photo_id = sint.photo_id
+                WHERE 1=1 {date_filter}
+                GROUP BY DATE(si.timestamp), sh.ranking_model
+                ORDER BY date ASC
+            """
+            self.cursor.execute(query, params)
+            rows = self.cursor.fetchall()
+
+            results = []
+            for row in rows:
+                impressions = row[2] or 0
+                clicks = row[3] or 0
+                ctr = (clicks / impressions * 100) if impressions > 0 else 0.0
+                results.append({
+                    "date": row[0],
+                    "model": row[1] or "unknown",
+                    "impressions": impressions,
+                    "clicks": clicks,
+                    "ctr": round(ctr, 2)
+                })
+
+            return results
+        except Exception as e:
+            logger.error(f"Failed to get CTR by date: {e}")
+            return []
+
+    def get_ctr_by_position(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Get CTR at each result position for position bias analysis.
+
+        Args:
+            limit: Maximum position to analyze
+
+        Returns:
+            List of dicts with position, impressions, clicks, ctr
+        """
+        try:
+            query = """
+                SELECT
+                    si.position,
+                    COUNT(*) as impressions,
+                    SUM(CASE WHEN sint.label = 1 THEN 1 ELSE 0 END) as clicks
+                FROM search_impressions si
+                LEFT JOIN search_interactions sint
+                    ON si.session_id = sint.session_id
+                    AND si.photo_id = sint.photo_id
+                WHERE si.position >= 0 AND si.position < ?
+                GROUP BY si.position
+                ORDER BY si.position ASC
+            """
+            self.cursor.execute(query, (limit,))
+            rows = self.cursor.fetchall()
+
+            results = []
+            for row in rows:
+                impressions = row[1] or 0
+                clicks = row[2] or 0
+                ctr = (clicks / impressions * 100) if impressions > 0 else 0.0
+                results.append({
+                    "position": row[0],
+                    "impressions": impressions,
+                    "clicks": clicks,
+                    "ctr": round(ctr, 2)
+                })
+
+            return results
+        except Exception as e:
+            logger.error(f"Failed to get CTR by position: {e}")
+            return []
+
+    def get_model_comparison_summary(self) -> Dict[str, Any]:
+        """
+        Get side-by-side comparison stats for portfolio display.
+
+        Returns:
+            Dict with model comparison metrics including lift percentages
+        """
+        try:
+            model_stats = self.get_ctr_by_model()
+
+            # Calculate average click position per model
+            avg_click_pos = {}
+            for model in model_stats.keys():
+                self.cursor.execute("""
+                    SELECT AVG(sint.position)
+                    FROM search_interactions sint
+                    JOIN search_history sh ON sint.session_id = sh.session_id
+                    WHERE sint.label = 1 AND sint.position >= 0 AND sh.ranking_model = ?
+                """, (model,))
+                result = self.cursor.fetchone()
+                avg_click_pos[model] = round(result[0], 1) if result[0] else 0.0
+
+            # Add average click position to stats
+            for model in model_stats:
+                model_stats[model]["avg_click_position"] = avg_click_pos.get(model, 0.0)
+
+            # Calculate lift if we have both models
+            summary = {"models": model_stats}
+
+            if "xgboost" in model_stats and "heuristic" in model_stats:
+                xgb = model_stats["xgboost"]
+                heur = model_stats["heuristic"]
+
+                if heur["ctr"] > 0:
+                    ctr_lift = ((xgb["ctr"] - heur["ctr"]) / heur["ctr"]) * 100
+                    summary["ctr_lift"] = round(ctr_lift, 1)
+
+                if heur["avg_click_position"] > 0:
+                    pos_lift = ((heur["avg_click_position"] - xgb["avg_click_position"]) / heur["avg_click_position"]) * 100
+                    summary["position_lift"] = round(pos_lift, 1)
+
+            # Get date range
+            self.cursor.execute("""
+                SELECT MIN(timestamp), MAX(timestamp) FROM search_impressions
+            """)
+            date_range = self.cursor.fetchone()
+            summary["date_range"] = {
+                "start": date_range[0] if date_range[0] else None,
+                "end": date_range[1] if date_range[1] else None
+            }
+
+            return summary
+        except Exception as e:
+            logger.error(f"Failed to get model comparison summary: {e}")
+            return {"models": {}, "date_range": {"start": None, "end": None}}
 

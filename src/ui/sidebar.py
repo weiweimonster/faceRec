@@ -7,7 +7,7 @@ def render_sidebar():
     # 1. Navigation
     app_mode = st.sidebar.radio(
         "Navigate",
-        ["🔎 Search", "👥 Labeling"]
+        ["🔎 Search", "👥 Labeling", "📊 Analytics"]
     )
 
     # 2. Search/Generate Controls

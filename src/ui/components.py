@@ -3,21 +3,21 @@ import os
 from typing import Dict, List, Any
 from src.common.types import ImageAnalysisResult, FaceData
 
-def toggle_selection(photo_id: str, session_id: str):
+def toggle_selection(photo_id: str, session_id: str, position: int = -1):
     """
-    Stores a unique combination of (Photo + Session).
+    Stores a unique combination of (Photo + Session + Position).
     Allows the same photo to be 'relevant' for multiple different searches.
     """
     if "selected_pairs" not in st.session_state:
-        st.session_state.selected_pairs = set() # Set of tuples
+        st.session_state.selected_pairs = {}  # Dict of {(photo_id, session_id): position}
 
-    # The unique key is now the PAIR
+    # The unique key is the PAIR
     interaction_key = (photo_id, session_id)
 
     if interaction_key in st.session_state.selected_pairs:
-        st.session_state.selected_pairs.remove(interaction_key)
+        del st.session_state.selected_pairs[interaction_key]
     else:
-        st.session_state.selected_pairs.add(interaction_key)
+        st.session_state.selected_pairs[interaction_key] = position
 
 @st.fragment
 def render_photo_card(
@@ -25,7 +25,8 @@ def render_photo_card(
         display_metrics: Dict[str, Any],
         context_label: str = "",
         show_raw: bool = False,
-        session_id: str = "default"
+        session_id: str = "default",
+        position: int = -1
 ):
     """
     Render photo card with interactive selection and metrics display.
@@ -36,6 +37,7 @@ def render_photo_card(
         context_label: Label like "#1" for rank display
         show_raw: Whether to show detailed face analysis
         session_id: Search session ID for click tracking
+        position: Position in search results (0-indexed) for CTR tracking
     """
     if not result:
         st.error("Results not found")
@@ -45,7 +47,7 @@ def render_photo_card(
     # 1. Render Image
     st.image(display_path, width="stretch")
 
-    is_selected = (result.photo_id, session_id) in st.session_state.get("selected_pairs", set())
+    is_selected = (result.photo_id, session_id) in st.session_state.get("selected_pairs", {})
 
     btn_type = "primary" if not is_selected else "secondary"
     btn_label = "🌟 Best Match" if not is_selected else "✅ Selected (Undo)"
@@ -55,7 +57,7 @@ def render_photo_card(
         key=f"btn_{result.photo_id}_{session_id}", # Unique key per session
         type=btn_type,
         on_click=toggle_selection,
-        args=(result.photo_id, session_id),
+        args=(result.photo_id, session_id, position),
         use_container_width=True
     )
 

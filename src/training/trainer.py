@@ -136,7 +136,8 @@ class XGBoostTrainer:
         leaderboard_capacity: int = 10,
         test_size: float = 0.2,
         random_state: int = 42,
-        early_stopping_rounds: int = 10
+        early_stopping_rounds: int = 10,
+        model_filter: str = "heuristic"
     ):
         """
         Initialize the trainer.
@@ -151,6 +152,9 @@ class XGBoostTrainer:
             test_size: Fraction of data for validation.
             random_state: Random seed for reproducibility.
             early_stopping_rounds: XGBoost early stopping patience.
+            model_filter: Only train on data from this ranking model.
+                          Use "heuristic" (default) to avoid training on own outputs.
+                          Use "all" to include all data regardless of source model.
         """
         self.db_path = db_path
         self.model_output_dir = model_output_dir
@@ -161,6 +165,7 @@ class XGBoostTrainer:
         self.test_size = test_size
         self.random_state = random_state
         self.early_stopping_rounds = early_stopping_rounds
+        self.model_filter = model_filter
 
         # Will be populated after loading data
         self.df: Optional[pd.DataFrame] = None
@@ -175,25 +180,39 @@ class XGBoostTrainer:
             DataFrame with features, labels, and session grouping.
         """
         logger.info(f"Loading training data from {self.db_path}")
+        logger.info(f"Model filter: {self.model_filter}")
 
         if not os.path.exists(self.db_path):
             raise FileNotFoundError(f"Database not found: {self.db_path}")
 
         conn = sqlite3.connect(self.db_path)
 
-        # Fetch interactions with features_json
-        query = """
-            SELECT i.session_id, i.label, i.features_json
-            FROM search_interactions i
-            JOIN search_history h ON i.session_id = h.session_id
-            WHERE i.features_json IS NOT NULL
-            ORDER BY h.timestamp ASC
-        """
+        # Build query with optional model filter
+        # Default filters to heuristic to avoid training on model's own outputs
+        if self.model_filter and self.model_filter.lower() != "all":
+            query = """
+                SELECT i.session_id, i.label, i.features_json
+                FROM search_interactions i
+                JOIN search_history h ON i.session_id = h.session_id
+                WHERE i.features_json IS NOT NULL
+                  AND h.ranking_model = ?
+                ORDER BY h.timestamp ASC
+            """
+            rows = conn.execute(query, (self.model_filter,)).fetchall()
+        else:
+            query = """
+                SELECT i.session_id, i.label, i.features_json
+                FROM search_interactions i
+                JOIN search_history h ON i.session_id = h.session_id
+                WHERE i.features_json IS NOT NULL
+                ORDER BY h.timestamp ASC
+            """
+            rows = conn.execute(query).fetchall()
 
-        rows = conn.execute(query).fetchall()
         conn.close()
 
-        logger.info(f"Found {len(rows)} interactions with features")
+        filter_msg = f" (filtered by model={self.model_filter})" if self.model_filter and self.model_filter.lower() != "all" else ""
+        logger.info(f"Found {len(rows)} interactions with features{filter_msg}")
 
         if not rows:
             raise ValueError("No training data found in database")
@@ -454,6 +473,13 @@ def main():
         action="store_true",
         help="Don't save models to disk"
     )
+    parser.add_argument(
+        "--model-filter",
+        default="heuristic",
+        help="Only train on data from this ranking model. "
+             "Use 'heuristic' (default) to avoid training on own outputs. "
+             "Use 'all' to include all data."
+    )
 
     args = parser.parse_args()
 
@@ -462,7 +488,8 @@ def main():
         model_output_dir=args.output_dir,
         min_features=args.min_features,
         max_features=args.max_features,
-        leaderboard_capacity=args.top_k
+        leaderboard_capacity=args.top_k,
+        model_filter=args.model_filter
     )
 
     trainer.run(save_models=not args.no_save)

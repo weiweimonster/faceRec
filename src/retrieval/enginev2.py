@@ -38,6 +38,17 @@ class SearchEngine:
         else:
             logger.error(f"Invalid strategy type: {strategy_type}, keeping current settings")
 
+    @property
+    def current_strategy(self) -> str:
+        """Returns the name of the currently active ranking strategy."""
+        strategy_class = type(self.ranker.strategy).__name__
+        # Map class names to simple identifiers for storage
+        strategy_map = {
+            "XGBoostRanker": "xgboost",
+            "HeuristicStrategy": "heuristic"
+        }
+        return strategy_map.get(strategy_class, "unknown")
+
     def searchv2(self, filters: SearchFilters, limit: int = 20, rank: bool = True) -> RankingResult:
         """
         Search pipeline: SQL candidates -> CLIP Encoding -> Chroma Similarity -> Hydration -> Ranker.
