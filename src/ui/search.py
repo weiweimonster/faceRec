@@ -40,7 +40,7 @@ def render_search_page(mode="search", show_raw=False):
                     st.json(search_filter.to_dict())
 
         # 2. Execution
-        ranking_result = engine.searchv2(search_filter, limit=100)
+        ranking_result = engine.searchv2(search_filter, limit=30)
         st.markdown(f"**Found {len(ranking_result.ranked_results)} results for:** `{query}`")
 
         # 3. Store History (for LTR)

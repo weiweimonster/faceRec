@@ -49,7 +49,7 @@ class SearchEngine:
         }
         return strategy_map.get(strategy_class, "unknown")
 
-    def searchv2(self, filters: SearchFilters, limit: int = 20, rank: bool = True) -> RankingResult:
+    def searchv2(self, filters: SearchFilters, limit: int = 30, rank: bool = True) -> RankingResult:
         """
         Search pipeline: SQL candidates -> CLIP Encoding -> Chroma Similarity -> Hydration -> Ranker.
         """

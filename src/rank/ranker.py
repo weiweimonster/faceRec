@@ -24,7 +24,7 @@ class SearchResultRanker:
         caption_scores: Optional[Dict[str, float]] = None,
         target_name: Optional[str] = None,
         lambda_param: float = 0.6,
-        top_k: int = 50,
+        top_k: int = 30,
         pose: Optional[Pose] = None
     ) -> RankingResult:
         """

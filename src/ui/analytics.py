@@ -175,7 +175,7 @@ def render_position_bias(db):
     st.subheader("Position Bias Analysis")
     st.caption("CTR decay by result position - shows how click-through rate decreases with lower positions")
 
-    position_data = db.get_ctr_by_position(limit=20)
+    position_data = db.get_ctr_by_position(limit=30)
 
     if not position_data:
         st.info("No position data available yet.")
