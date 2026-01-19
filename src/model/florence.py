@@ -46,11 +46,22 @@ class VisionScanner:
 
         try:
             # Qwen uses a standard chat format
+            image = Image.open(image_path).convert("RGB")
+
+            # --- SPEED OPTIMIZATION ---
+            # Resize image so the longest edge is max 1280px.
+            # This massively reduces the visual tokens (from ~12k to ~1.2k)
+            # while keeping enough detail for general captions.
+            image.thumbnail((1280, 1280))
+            # --------------------------
+
+            # 2. Qwen Chat Format
             messages = [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image", "image": image_path},
+                        # Pass the RESIZED PIL object directly, not the path
+                        {"type": "image", "image": image},
                         {"type": "text", "text": "Describe this image in detail."},
                     ],
                 }
