@@ -9,6 +9,7 @@ from src.rank.heuristic_ranker import HeuristicStrategy
 from src.rank.ranker import SearchResultRanker
 from src.rank.xgboost_ranker import XGBoostRanker
 from src.rank.base import RankingResult
+from src.model.text_embedder import TextEmbedder
 
 class SearchEngine:
     def __init__(self, db: DatabaseManager):
@@ -16,6 +17,7 @@ class SearchEngine:
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         logger.info(f"✅ Search Engine Ready on {self.device}")
         self.model, self.preprocess = clip.load("ViT-L/14", device=self.device)
+        self.text_model = TextEmbedder()
         self.ranker = SearchResultRanker(strategy=XGBoostRanker())
 
     def _encode_text(self, text: str) -> List[float]:
@@ -24,6 +26,9 @@ class SearchEngine:
             query_vec = self.model.encode_text(text_input)
             query_vec /= query_vec.norm(dim=-1, keepdim=True)
             return query_vec.cpu().numpy().flatten().tolist()
+
+    def _encode_text_textual(self, text: str) -> List[float]:
+        return self.text_model.embed(text, "query")
 
     def set_ranking_strategy(self, strategy_type: str):
         if strategy_type.lower() == "xgboost":
@@ -56,6 +61,7 @@ class SearchEngine:
         # 2. Text Encoding (Logic resides in SearchEngine)
         if filters.semantic_query:
             query_vector = self._encode_text(filters.semantic_query)
+            caption_query_vector = self._encode_text_textual(filters.semantic_query)
         else:
             logger.error("No semantic query found. Returning empty.")
             return RankingResult([], {}, {})
@@ -66,10 +72,18 @@ class SearchEngine:
         semantic_data = self.db.get_semantic_candidates(
             query_vector=query_vector,
             allowed_paths=candidate_paths,
-            limit=limit * 3  # Fetch a larger pool for the ranker to filter/diversify
+            limit=limit * 3,  # Fetch a larger pool for the ranker to filter/diversify
+            collection="visual"
         )
 
-        if not semantic_data:
+        caption_results = self.db.get_semantic_candidates(
+            query_vector=caption_query_vector,
+            allowed_paths=candidate_paths,
+            limit=limit * 3,
+            collection="caption"
+        )
+
+        if not semantic_data or not caption_results:
             return RankingResult([], {}, {})
 
         # 4. Metadata Hydration
@@ -81,6 +95,7 @@ class SearchEngine:
         hydrated_results = self.db.fetch_metadata_batch(ordered_paths, fields="all")
 
         semantic_scores_only = {}
+        caption_scores_only = {}
         # TODO: Move this into a private function
         for res in hydrated_results:
             if res.display_path in semantic_data:
@@ -92,6 +107,10 @@ class SearchEngine:
                 # B. INJECT VECTOR
                 res.semantic_vector = vector
 
+            if res.display_path in caption_results:
+                caption_score, _ = caption_results[res.display_path]
+                caption_scores_only[res.display_path] = caption_score
+
         # We need to identify the target person for the 'Quality Boost' logic
         target_person = filters.people[0] if (filters.people and len(filters.people) > 0) else None
 
@@ -99,6 +118,7 @@ class SearchEngine:
         ranking_result = self.ranker.process(
             results=hydrated_results,
             semantic_scores=semantic_scores_only,
+            caption_scores=caption_scores_only,
             target_name=target_person,
             lambda_param=0.7,
             top_k=limit,

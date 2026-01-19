@@ -29,6 +29,7 @@ class XGBoostRanker(BaseRankingStrategy):
             self,
             results: List[ImageAnalysisResult],
             semantic_scores: Dict[str, float],
+            caption_scores: Dict[str, float],
             target_name: Optional[str] = None,
             pose: Optional[Pose] = None
     ) -> RankingResult:
@@ -57,7 +58,10 @@ class XGBoostRanker(BaseRankingStrategy):
         rows: List[Dict[str, float]] = []
 
         for item in results:
-            context = {"semantic_score": semantic_scores.get(item.display_path, 0.0)}
+            context = {
+                "semantic_score": semantic_scores.get(item.display_path, 0.0),
+                "caption_score": caption_scores.get(item.display_path, 0.0)
+            }
             features = self.extractor.extract_from_result(
                 result=item,
                 context=context,

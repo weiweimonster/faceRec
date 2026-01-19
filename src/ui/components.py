@@ -66,7 +66,7 @@ def render_photo_card(
         if display_metrics:
             st.subheader("Ranking Breakdown")
             # Separate keys into groups to make them readable
-            semantic_keys = {"semantic", "mmr_rank", "final_relevance", "xgboost_score"}
+            semantic_keys = {"semantic", "caption", "mmr_rank", "final_relevance", "xgboost_score"}
             global_metrics = {k: v for k, v in display_metrics.items() if k.startswith("g_")}
             face_metrics = {k: v for k, v in display_metrics.items() if k.startswith("f_")}
 

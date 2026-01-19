@@ -21,6 +21,7 @@ class SearchResultRanker:
         self,
         results: List[ImageAnalysisResult],
         semantic_scores: Dict[str, float],
+        caption_scores: Optional[Dict[str, float]] = None,
         target_name: Optional[str] = None,
         lambda_param: float = 0.6,
         top_k: int = 50,
@@ -32,6 +33,7 @@ class SearchResultRanker:
         Args:
             results: Candidate images to rank
             semantic_scores: CLIP similarity scores
+            caption_scores: Caption similarity scores
             target_name: Person name for face quality boost
             lambda_param: MMR balance (1.0=relevance only, 0.0=diversity only)
             top_k: Number of results to return
@@ -49,8 +51,12 @@ class SearchResultRanker:
                 training_features={}
             )
 
+        if caption_scores is None:
+            logger.warning("Caption sore is none for ranking")
+            caption_scores = {}
+
         ranking_result = self.strategy.score_candidates(
-            results, semantic_scores, target_name, pose
+            results, semantic_scores, caption_scores, target_name, pose
         )
 
         logger.info(f"{type(self.strategy).__name__} ranked {len(ranking_result.ranked_results)} candidates")

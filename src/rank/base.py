@@ -44,6 +44,7 @@ class BaseRankingStrategy(ABC):
         self,
         results: List[ImageAnalysisResult],
         semantic_scores: Dict[str, float],
+        caption_scores: Dict[str, float],
         target_name: Optional[str] = None,
         pose: Optional[Pose] = None
     ) -> RankingResult:
@@ -52,7 +53,8 @@ class BaseRankingStrategy(ABC):
 
         Args:
             results: List of image analysis objects.
-            semantic_scores: Dictionary mapping file paths to vector similarity scores.
+            semantic_scores: Dictionary mapping file paths to visual vector similarity scores.
+            caption_scores: Dictionary mapping file paths to caption embedding similarity scores.
             target_name: (Optional) The name of the person being searched for.
             pose: (Optional) The specific pose requested.
 

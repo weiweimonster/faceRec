@@ -20,7 +20,7 @@ class DatabaseManager:
     2. ChromaDB: For semantic vector search (CLIP embeddings).
     """
 
-    def __init__(self, sql_path: str = "db/sqlite/photos.db", chroma_path: str = "db/chroma/"):
+    def __init__(self, sql_path: str = ".db/sqlite/photos.db", chroma_path: str = "db/chroma/"):
         # Ensure directories exist
         Path(sql_path).parent.mkdir(parents=True, exist_ok=True)
         Path(chroma_path).mkdir(parents=True, exist_ok=True)
@@ -40,6 +40,11 @@ class DatabaseManager:
         # "cosine" distance is CRITICAL for normalized CLIP embeddings.
         self.vector_collection = self.chroma_client.get_or_create_collection(
             name="photo_gallery",
+            metadata={"hnsw:space": "cosine"}
+        )
+
+        self.caption_collection = self.chroma_client.get_or_create_collection(
+            name="caption_gallery",
             metadata={"hnsw:space": "cosine"}
         )
 
@@ -268,6 +273,12 @@ class DatabaseManager:
                 metadatas=[metadata]
             )
 
+            self.caption_collection.add(
+                ids=[photo_id],
+                embeddings=[result.caption_vector],
+                metadatas=[metadata]
+            )
+
             self.conn.commit()
 
             return photo_id
@@ -356,9 +367,19 @@ class DatabaseManager:
             logger.error(f"SQL Candidate Search Error: {e}")
             return []
 
-    def get_semantic_candidates(self, query_vector: List[float], allowed_paths: List[str], limit: int) -> Dict[str, float]:
+    def get_semantic_candidates(
+            self,
+            query_vector: List[float],
+            allowed_paths: List[str],
+            limit: int,
+            collection: str = "visual"
+    ) -> Dict[str, float]:
+        if collection == "caption":
+            target_col = self.caption_collection
+        else:
+            target_col = self.vector_collection
         # Note: Directly taking query_vector to prevent loading heavy model like CLIP
-        logger.info("Performing Vector Search with Chroma")
+        logger.info(f"Performing Vector Search with {collection}")
 
         search_params = {
             "query_embeddings": [query_vector],
@@ -370,7 +391,7 @@ class DatabaseManager:
             search_params["where"] = {"path": {"$in": allowed_paths}}
 
         try:
-            results = self.vector_collection.query(**search_params)
+            results = target_col.query(**search_params)
             # Dict: Path -> Semantic Score
             output = {}
             if results['metadatas']:
@@ -430,6 +451,7 @@ class DatabaseManager:
             "global_contrast": "ph.global_contrast",
             "month": "ph.month",
             "time_period": "ph.time_period",
+            "caption_text": "ph.caption_text",
         }
 
         # Handle the "all" logic
@@ -463,10 +485,6 @@ class DatabaseManager:
 
         logger.info(f"Debug: cols names: {col_names}")
 
-        # if rows and len(rows) > 0:
-            # TODO: Remove this after debugging
-            # logger.info(f"Debug: first row of metadata fetching: {rows[0]}")
-
         for i, row in enumerate(rows):
             row_dict = dict(zip(col_names, row))
             p_id = row_dict['photo_id']
@@ -487,6 +505,7 @@ class DatabaseManager:
                     global_contrast=row_dict.get('global_contrast'),
                     time_period=row_dict.get('time_period'),
                     month=row_dict.get('month'),
+                    caption=row_dict.get('caption_text'),
                     faces=[]
                 )
             # 4. Extract Face Data (only if confidence exists, meaning a face was joined)

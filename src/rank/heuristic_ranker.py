@@ -11,7 +11,8 @@ from src.util.logger import logger
 class HeuristicStrategy(BaseRankingStrategy):
 
     WEIGHTS = {
-        "semantic": 0.85,
+        "semantic": 0.6,
+        "caption": 0.25,
         "face_quality": 0.1,
         "global_quality": 0.05,
         "w_aesthetic": 0.4,
@@ -24,6 +25,7 @@ class HeuristicStrategy(BaseRankingStrategy):
             self,
             results: List[ImageAnalysisResult],
             semantic_scores: Dict[str, float],
+            caption_scores: Dict[str, float],
             target_name: Optional[str] = None,
             pose: Optional[Pose] = None
     ) -> RankingResult:
@@ -38,6 +40,7 @@ class HeuristicStrategy(BaseRankingStrategy):
 
             # get the semantic score
             semantic_sim = semantic_scores[path]
+            caption_sim = caption_scores.get(path, 0.0)
 
             # Calculate the global quality scores
             global_q, g_display_metrics = self._calculate_global_quality(item)
@@ -48,8 +51,12 @@ class HeuristicStrategy(BaseRankingStrategy):
 
             w = self.WEIGHTS
 
-            # Combine semantic score and global score
-            final_score = (semantic_sim * w["semantic"]) + (global_q * w["global_quality"])
+            # Combine semantic score, caption score, and global score
+            final_score = (
+                (semantic_sim * w["semantic"]) +
+                (caption_sim * w["caption"]) +
+                (global_q * w["global_quality"])
+            )
 
             # If this is person related, then combine face quality score
             if target_name:
@@ -58,11 +65,15 @@ class HeuristicStrategy(BaseRankingStrategy):
             display_metrics[path]: Dict[str, Any] = {
                 "final_relevance": round(final_score, 4),
                 "semantic": round(semantic_sim, 3),
+                "caption": round(caption_sim, 3),
                 **g_display_metrics,
                 **f_display_metrics
             }
 
-            context = {"semantic_score": semantic_sim}
+            context = {
+                "semantic_score": semantic_sim,
+                "caption_score": caption_sim
+            }
             training_features[path] = FeatureExtractor.extract_from_result(
                 result=item,
                 context=context,

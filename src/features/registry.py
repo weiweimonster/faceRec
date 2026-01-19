@@ -131,6 +131,15 @@ FEATURE_REGISTRY: Dict[str, FeatureDefinition] = {
         description="CLIP cosine similarity between query and image"
     ),
 
+    "caption_score": FeatureDefinition(
+        name="caption_score",
+        category=FeatureType.SEMANTIC,
+        dtype=FeatureDataType.FLOAT,
+        extractor=lambda result, ctx: ctx.get("caption_score", 0.0),
+        is_trainable=True,
+        description="E5 cosine similarity between query and caption embedding"
+    ),
+
     "mmr_rank": FeatureDefinition(
         name="mmr_rank",
         category=FeatureType.COMPUTED,
