@@ -3,6 +3,7 @@ from __future__ import annotations
 import cv2, torch, clip
 import numpy as np
 from PIL import Image
+from pathlib import Path
 from insightface.app import FaceAnalysis
 from typing import List, Tuple, Optional, Any
 from src.pose.pose_extractor import PoseExtractor
@@ -14,6 +15,9 @@ from src.util.logger import logger
 from src.model.aesthetic_predictor import AestheticPredictor
 from src.model.text_embedder import TextEmbedder
 from src.model.florence import VisionScanner
+
+# Project root: go up from src/ingestion/processor.py -> src/ingestion -> src -> project root
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 class FeatureExtractor:
     """
@@ -30,7 +34,7 @@ class FeatureExtractor:
         self.pose_extractor = PoseExtractor(gpu=use_gpu)
         self.aesthetic_predictor = AestheticPredictor(
             input_size=768,
-            model_path="sac_logos_ava1-l14-linearMSE.pth",
+            model_path=str(PROJECT_ROOT / "sac_logos_ava1-l14-linearMSE.pth"),
             device=self.device,
         )
 

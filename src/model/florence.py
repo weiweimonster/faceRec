@@ -1,92 +1,95 @@
 import torch
+from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+from qwen_vl_utils import process_vision_info
 from PIL import Image
-from transformers import AutoProcessor, AutoModelForCausalLM
-from typing import Optional, Any, Dict
-import os
+from pathlib import Path
 import gc
 from src.util.logger import logger
 
+# Project root: go up from src/model/florence.py -> src/model -> src -> project root
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 class VisionScanner:
     def __init__(self) -> None:
-        self.device: str = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model: Any = None
-        self.processor: Optional[AutoProcessor] = None
-        self.local_model_path = "./models/Florence-2-large"
-
-    def load(self) -> None:
-        if self.model is None:
-            logger.warning("Vision model is already loaded, skipping")
-            return
-
-        if os.path.exists(self.local_model_path):
-            logger.info(f"📂 Loading Vision Scanner from LOCAL: {self.local_model_path}...")
-            load_path = self.local_model_path
-        else:
-            logger.error(f"Cannot find vision model to load. Exiting...")
-            return
-
-        self.processor = AutoProcessor.from_pretrained(load_path, trust_remote_code=True)
-        self.model = AutoModelForCausalLM.from_pretrained(
-                load_path,
-                trust_remote_code=True,
-                torch_dtype=torch.float16,
-                attn_implementation="eager"
-            )
-
-        logger.info("Vision Scanner loaded")
-
-    def extract_caption(self, image_path: str) -> str:
-        if self.model is None:
-            logger.info("Loading Vision Scanner Model")
-            self.load()
-        if not os.path.exists(image_path):
-            logger.error(f"⚠️ Warning: Image not found at {image_path}")
-            return ""
-
-        try:
-            image: Image.Image = Image.open(image_path)
-            if image.mode != "RGB":
-                image = image.convert("RGB")
-
-            prompt: str = "<MORE_DETAILED_CAPTION>"
-            inputs = self.processor(text=prompt, images=image, return_tensors="pt").to(self.device, torch.float16)
-
-            with torch.no_grad():
-                generated_ids = self.model.generate(
-                    input_ids=inputs["input_ids"],
-                    pixel_values=inputs["pixel_values"],
-                    max_new_tokens=1024,
-                    do_sample=False,
-                    num_beams=3,
-                )
-
-            generated_text: str = self.processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
-
-            parsed: Dict[str, Any] = self.processor.post_process_generation(
-                generated_text,
-                task=prompt,
-                image_size=(image.width, image.height)
-            )
-
-            return str(parsed.get(prompt, ""))
-
-        except Exception as e:
-            logger.error(f"❌ Vision Error on {image_path}: {e}")
-            return ""
-
-    def unload(self) -> None:
-        """
-        Free up VRAM when scanning is finished.
-        """
-        if self.model is None:
-            return
-
-        logger.info("🗑️ Unloading Vision Scanner...")
-        del self.model
-        del self.processor
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
         self.model = None
         self.processor = None
+        self.hub_id = "Qwen/Qwen2-VL-2B-Instruct"
+        self.local_path = PROJECT_ROOT / "models" / "Qwen2-VL-2B-Instruct"
 
+    def load(self) -> None:
+        if self.model is not None: return
+
+        # Check if local path exists and is not empty
+        if self.local_path.exists() and any(self.local_path.iterdir()):
+            load_path = str(self.local_path)
+            logger.info(f"Loading Qwen2-VL from LOCAL: {load_path}...")
+        else:
+            load_path = self.hub_id
+            logger.info(f"Local model not found. Downloading Qwen2-VL from HUB: {load_path}...")
+
+        try:
+            self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+                load_path,
+                torch_dtype=self.dtype,
+                device_map="auto"
+            )
+            self.processor = AutoProcessor.from_pretrained(load_path)
+            logger.info(f"Qwen2-VL loaded on {self.device}")
+        except Exception as e:
+            logger.error(f"Load failed: {e}")
+
+    def extract_caption(self, image_path: str) -> str:
+        if self.model is None: self.load()
+        if self.model is None: return ""
+
+        try:
+            # Qwen uses a standard chat format
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": image_path},
+                        {"type": "text", "text": "Describe this image in detail."},
+                    ],
+                }
+            ]
+
+            text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            image_inputs, video_inputs = process_vision_info(messages)
+
+            inputs = self.processor(
+                text=[text],
+                images=image_inputs,
+                videos=video_inputs,
+                padding=True,
+                return_tensors="pt",
+            ).to(self.device)
+
+            # Generate
+            generated_ids = self.model.generate(**inputs, max_new_tokens=128)
+
+            # Decode
+            output_text = self.processor.batch_decode(
+                generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
+            )
+
+            # Parse response (strip the prompt)
+            response = output_text[0]
+            if "assistant" in response:
+                return response.split("assistant")[-1].strip()
+            return response
+
+        except Exception as e:
+            logger.error(f"Qwen error on {image_path}: {e}")
+            return ""
+
+    def unload(self):
+        if self.model is not None:
+            del self.model
+            del self.processor
+            self.model = None
+            self.processor = None
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        torch.cuda.empty_cache()

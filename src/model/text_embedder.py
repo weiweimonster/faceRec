@@ -2,8 +2,12 @@ from sentence_transformers import SentenceTransformer
 import torch
 import numpy as np
 from typing import List, Optional, Union
+from pathlib import Path
 from src.util.logger import logger
 import os
+
+# Project root: go up from src/model/text_embedder.py -> src/model -> src -> project root
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 class TextEmbedder:
     _instance: Optional["TextEmbedder"] = None
@@ -14,20 +18,20 @@ class TextEmbedder:
         if cls._instance is None:
             cls._instance = super(TextEmbedder, cls).__new__(cls)
             cls._instance.model = None
-            return cls._instance
+        return cls._instance
 
     def __init__(self) -> None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        # 1. Define Local Path
-        local_path = "./models/all-mpnet-base-v2"
+        if self.model is not None:
+            return  # Already initialized (singleton)
 
-        # 2. Check if local model exists
-        if os.path.exists(local_path):
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        local_path = PROJECT_ROOT / "models" / "all-mpnet-base-v2"
+
+        if local_path.exists():
             print(f"📂 Loading Local Model from {local_path}...")
-            self.model = SentenceTransformer(local_path, device=device)
+            self.model = SentenceTransformer(str(local_path), device=device)
         else:
-            # Fallback to download if missing
-            print(f"⚠️ Local model not found. Downloading from Hub...")
+            print(f"⚠️ Local model not found at {local_path}. Downloading from Hub...")
             self.model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2', device=device)
 
     def embed(self, text: str) -> Optional[List[float]]:
