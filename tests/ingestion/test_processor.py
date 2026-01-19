@@ -5,15 +5,7 @@ import numpy as np
 from unittest.mock import MagicMock, patch
 from src.ingestion.processor import FeatureExtractor
 from src.common.types import ImageAnalysisResult
-import sys
 from src.util.image_util import calculate_shot_type, calculate_face_quality, compute_global_visual_stats
-
-# We mock these 'src' imports before importing the actual module
-# so the test doesn't crash if these files aren't in the python path during testing.
-sys.modules['src.pose.pose_extractor'] = MagicMock()
-sys.modules['src.util.image_util'] = MagicMock()
-sys.modules['src.model.florence'] = MagicMock()
-sys.modules['src.model.text_embedder'] = MagicMock()
 
 @pytest.fixture
 def mock_dependencies():

@@ -121,7 +121,8 @@ class TestXGBoostRankerScoreCandidates:
                 ranker = XGBoostRanker()
 
         semantic_scores = {mock_image.display_path: 0.85}
-        result = ranker.score_candidates([mock_image], semantic_scores)
+        caption_scores = {mock_image.display_path: 0.80}
+        result = ranker.score_candidates([mock_image], semantic_scores, caption_scores)
 
         assert isinstance(result, RankingResult)
         assert len(result.ranked_results) == 1
@@ -133,7 +134,7 @@ class TestXGBoostRankerScoreCandidates:
             with patch("src.rank.xgboost_ranker.logger"):
                 ranker = XGBoostRanker()
 
-        result = ranker.score_candidates([], {})
+        result = ranker.score_candidates([], {}, {})
 
         assert isinstance(result, RankingResult)
         assert result.ranked_results == []
@@ -155,8 +156,13 @@ class TestXGBoostRankerScoreCandidates:
             "/display/img1.jpg": 0.80,
             "/display/img2.jpg": 0.75
         }
+        caption_scores = {
+            "/display/img0.jpg": 0.80,
+            "/display/img1.jpg": 0.75,
+            "/display/img2.jpg": 0.70
+        }
 
-        result = ranker.score_candidates(mock_images, semantic_scores)
+        result = ranker.score_candidates(mock_images, semantic_scores, caption_scores)
 
         assert isinstance(result, RankingResult)
         assert len(result.ranked_results) == 3
@@ -179,7 +185,8 @@ class TestXGBoostRankerScoreCandidates:
                     ranker = XGBoostRanker(model_path="model.json")
 
         semantic_scores = {img.display_path: 0.8 for img in mock_images}
-        result = ranker.score_candidates(mock_images, semantic_scores)
+        caption_scores = {img.display_path: 0.75 for img in mock_images}
+        result = ranker.score_candidates(mock_images, semantic_scores, caption_scores)
 
         for path in semantic_scores:
             assert path in result.display_metrics
@@ -197,7 +204,8 @@ class TestXGBoostRankerScoreCandidates:
                     ranker = XGBoostRanker(model_path="model.json")
 
         semantic_scores = {img.display_path: 0.8 for img in mock_images}
-        result = ranker.score_candidates(mock_images, semantic_scores)
+        caption_scores = {img.display_path: 0.75 for img in mock_images}
+        result = ranker.score_candidates(mock_images, semantic_scores, caption_scores)
 
         for path in semantic_scores:
             assert path in result.training_features
@@ -229,9 +237,11 @@ class TestXGBoostRankerScoreCandidates:
                     ranker = XGBoostRanker(model_path="model.json")
 
         semantic_scores = {img.display_path: 0.8 for img in mock_images}
+        caption_scores = {img.display_path: 0.75 for img in mock_images}
         result = ranker.score_candidates(
             mock_images,
             semantic_scores,
+            caption_scores,
             target_name="John"
         )
 
@@ -253,7 +263,8 @@ class TestXGBoostRankerScoreCandidates:
                     ranker = XGBoostRanker(model_path="model.json")
 
         semantic_scores = {mock_image.display_path: 0.85}
-        result = ranker.score_candidates([mock_image], semantic_scores)
+        caption_scores = {mock_image.display_path: 0.80}
+        result = ranker.score_candidates([mock_image], semantic_scores, caption_scores)
 
         # Verify only model's features are extracted
         features = result.training_features[mock_image.display_path]

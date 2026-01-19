@@ -66,7 +66,7 @@ def mock_semantic_scores(mock_images):
 class MockStrategy(BaseRankingStrategy):
     """Mock strategy for testing"""
 
-    def score_candidates(self, results, semantic_scores, target_name=None, pose=None):
+    def score_candidates(self, results, semantic_scores, caption_scores=None, target_name=None, pose=None):
         scored = [(r, semantic_scores.get(r.display_path, 0.0)) for r in results]
         scored.sort(key=lambda x: x[1], reverse=True)
 

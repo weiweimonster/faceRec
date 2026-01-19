@@ -524,7 +524,6 @@ class DatabaseManager:
             "global_contrast": "ph.global_contrast",
             "month": "ph.month",
             "time_period": "ph.time_period",
-            "caption_text": "ph.caption_text",
         }
 
         # Handle the "all" logic
@@ -578,7 +577,6 @@ class DatabaseManager:
                     global_contrast=row_dict.get('global_contrast'),
                     time_period=row_dict.get('time_period'),
                     month=row_dict.get('month'),
-                    caption=row_dict.get('caption_text'),
                     faces=[]
                 )
             # 4. Extract Face Data (only if confidence exists, meaning a face was joined)

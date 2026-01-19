@@ -1,7 +1,7 @@
 # User data
 photos/
 .db/
-db/
+/db/
 
 # Environment
 .env
@@ -36,3 +36,5 @@ src/db/update*
 *.pyc
 *.pyo
 .DS_Store
+
+ingestion_metrics.json

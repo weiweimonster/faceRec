@@ -14,13 +14,24 @@ from src.util.search_config import SearchFilters
 def mock_chroma():
     with patch('src.db.storage.chromadb.PersistentClient') as mock_client_cls:
         mock_client_instance = mock_client_cls.return_value
-        mock_collection = MagicMock()
-        mock_client_instance.get_or_create_collection.return_value = mock_collection
+        mock_semantic_collection = MagicMock()
+        mock_caption_collection = MagicMock()
+
+        # Return different collection based on collection name
+        def get_collection(name, **kwargs):
+            if name == "photo_gallery":
+                return mock_semantic_collection
+            elif name == "caption_gallery":
+                return mock_caption_collection
+            return MagicMock()
+
+        mock_client_instance.get_or_create_collection.side_effect = get_collection
 
         yield {
             "client_cls": mock_client_cls,
             "client_instance": mock_client_instance,
-            "collection": mock_collection
+            "semantic_collection": mock_semantic_collection,
+            "caption_collection": mock_caption_collection,
         }
 
 @pytest.fixture
@@ -40,6 +51,8 @@ def sample_result():
         original_path="/orig/a.jpg",
         display_path="/disp/a.jpg",
         semantic_vector=np.random.rand(512).astype(np.float32),
+        caption="A sample photo",
+        caption_vector=[0.1] * 1024,  # Caption embedding
         # Metadata
         original_width=1920,
         original_height=1080,
@@ -75,6 +88,8 @@ def mock_filters():
     filters.year = None
     filters.pose = None
     filters.semantic_query = None
+    filters.month = None
+    filters.time_period = None
     return filters
 
 def test_init_creates_tables(db_manager):
@@ -147,13 +162,16 @@ def test_save_result_inserts_data(db_manager, mock_chroma, sample_result):
     assert face_row[2] == -1  # person_id default
     assert isinstance(face_row[3], bytes)  # embedding blob
 
-    # 6. Verify Chroma Vector
-    mock_chroma["collection"].add.assert_called_once()
-    call_args = mock_chroma["collection"].add.call_args[1]
+    # 6. Verify Chroma Semantic Vector
+    mock_chroma["semantic_collection"].add.assert_called_once()
+    call_args = mock_chroma["semantic_collection"].add.call_args[1]
 
     assert call_args["ids"] == [pid]
     assert len(call_args["embeddings"][0]) == 512
     assert call_args["metadatas"][0]["path"] == "/disp/a.jpg"
+
+    # 7. Verify Chroma Caption Vector
+    mock_chroma["caption_collection"].add.assert_called_once()
 
 
 def test_cascade_delete(db_manager, sample_result):
@@ -179,7 +197,7 @@ def test_save_result_rollback_on_error(db_manager, mock_chroma, sample_result):
     If ChromaDB fails, the SQLite record should be removed (rolled back).
     """
     # Force Chroma to raise an error
-    mock_chroma["collection"].add.side_effect = Exception("Chroma Connection Error")
+    mock_chroma["semantic_collection"].add.side_effect = Exception("Chroma Connection Error")
 
     # Attempt to save - should raise exception
     with pytest.raises(Exception) as exc:
@@ -279,7 +297,7 @@ def test_fetch_metadata_batch_invalid_path(db_manager):
 
 def test_get_semantic_candidates_math(db_manager, mock_chroma):
     """Verify distance to similarity conversion logic."""
-    mock_chroma["collection"].query.return_value = {
+    mock_chroma["semantic_collection"].query.return_value = {
         'metadatas': [[{'path': 'a.jpg'}, {'path': 'b.jpg'}]],
         'distances': [[0.1, 1.9]],
         'embeddings': [[[0.0]*512, [0.0]*512]] # Added mock embeddings return

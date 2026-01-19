@@ -340,16 +340,18 @@ class TestScoreCandidates:
     def test_score_candidates_returns_ranking_result(self, strategy, mock_image_basic):
         """Test that score_candidates returns RankingResult"""
         semantic_scores = {mock_image_basic.display_path: 0.85}
+        caption_scores = {mock_image_basic.display_path: 0.80}
 
-        result = strategy.score_candidates([mock_image_basic], semantic_scores)
+        result = strategy.score_candidates([mock_image_basic], semantic_scores, caption_scores)
 
         assert isinstance(result, RankingResult)
 
     def test_score_candidates_display_metrics(self, strategy, mock_image_basic):
         """Test that display_metrics are populated"""
         semantic_scores = {mock_image_basic.display_path: 0.85}
+        caption_scores = {mock_image_basic.display_path: 0.80}
 
-        result = strategy.score_candidates([mock_image_basic], semantic_scores)
+        result = strategy.score_candidates([mock_image_basic], semantic_scores, caption_scores)
 
         path = mock_image_basic.display_path
         assert path in result.display_metrics
@@ -359,8 +361,9 @@ class TestScoreCandidates:
     def test_score_candidates_training_features(self, strategy, mock_image_basic):
         """Test that training_features are populated"""
         semantic_scores = {mock_image_basic.display_path: 0.85}
+        caption_scores = {mock_image_basic.display_path: 0.80}
 
-        result = strategy.score_candidates([mock_image_basic], semantic_scores)
+        result = strategy.score_candidates([mock_image_basic], semantic_scores, caption_scores)
 
         path = mock_image_basic.display_path
         assert path in result.training_features
@@ -370,10 +373,12 @@ class TestScoreCandidates:
     def test_score_candidates_with_target_name(self, strategy, mock_image_with_face):
         """Test scoring with target_name for face quality"""
         semantic_scores = {mock_image_with_face.display_path: 0.80}
+        caption_scores = {mock_image_with_face.display_path: 0.75}
 
         result = strategy.score_candidates(
             [mock_image_with_face],
             semantic_scores,
+            caption_scores,
             target_name="John"
         )
 
@@ -412,8 +417,12 @@ class TestScoreCandidates:
             "/display/img1.jpg": 0.90,
             "/display/img2.jpg": 0.85
         }
+        caption_scores = {
+            "/display/img1.jpg": 0.85,
+            "/display/img2.jpg": 0.80
+        }
 
-        result = strategy.score_candidates([img1, img2], semantic_scores)
+        result = strategy.score_candidates([img1, img2], semantic_scores, caption_scores)
 
         # Both images should have metrics
         assert "/display/img1.jpg" in result.display_metrics
@@ -451,10 +460,15 @@ class TestScoreCandidates:
             "/display/hs.jpg": 0.95,  # High semantic
             "/display/hq.jpg": 0.50   # Low semantic
         }
+        caption_scores = {
+            "/display/hs.jpg": 0.90,
+            "/display/hq.jpg": 0.45
+        }
 
         result = strategy.score_candidates(
             [img_high_semantic, img_high_quality],
-            semantic_scores
+            semantic_scores,
+            caption_scores
         )
 
         # High semantic image should have higher final_relevance
@@ -476,6 +490,7 @@ class TestHeuristicStrategyIntegration:
         # Create diverse set of images
         images = []
         semantic_scores = {}
+        caption_scores = {}
 
         for i in range(5):
             img = ImageAnalysisResult(
@@ -492,8 +507,9 @@ class TestHeuristicStrategyIntegration:
 
             images.append(img)
             semantic_scores[img.display_path] = 0.9 - (i * 0.1)
+            caption_scores[img.display_path] = 0.85 - (i * 0.1)
 
-        result = strategy.score_candidates(images, semantic_scores)
+        result = strategy.score_candidates(images, semantic_scores, caption_scores)
 
         # Verify all images are in results
         assert len(result.display_metrics) == 5
