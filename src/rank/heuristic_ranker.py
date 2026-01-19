@@ -1,24 +1,14 @@
 import math
 from typing import List, Dict, Any, Tuple, Optional
-
-from tensorflow import truediv
-
 from src.common.types import ImageAnalysisResult, FaceData
 from src.pose.pose import Pose
-from .base import BaseRankingStrategy, ScoredCandidate
-from .rank_metrics import FaceRankMetrics, PictureRankMetrics
+from .base import BaseRankingStrategy, RankingResult
 from src.util.image_util import parse_date_components
+from src.features.registry import get_normalization_bounds
+from src.features.container import FeatureExtractor
+from src.util.logger import logger
 
 class HeuristicStrategy(BaseRankingStrategy):
-    # Tunable Hyperparameters (Moved from original class)
-    QUALITY_BOUNDS = {
-        "face_blur": {"min": 30, "max": 1200},
-        "face_size": {"min": 50, "max": 550},
-        "global_blur": {"min": 21.0, "max": 1400.0},
-        "iso": {"min": 40, "max": 1600},
-        "contrast": {"min": 35.0, "max": 80.0},
-        "aesthetic": {"min": 4.0, "max": 5.5}
-    }
 
     WEIGHTS = {
         "semantic": 0.85,
@@ -36,10 +26,11 @@ class HeuristicStrategy(BaseRankingStrategy):
             semantic_scores: Dict[str, float],
             target_name: Optional[str] = None,
             pose: Optional[Pose] = None
-    ) -> List[ScoredCandidate]:
+    ) -> RankingResult:
 
-        # Initialize empty results
-        scored_items: List[ScoredCandidate] = []
+        scored_items: List[Tuple[ImageAnalysisResult, float]] = []
+        display_metrics: Dict[str, Dict[str, Any]] = {}
+        training_features: Dict[str, Dict[str, float]] = {}
 
         # Iterate though all the result and calculate metrics
         for item in results:
@@ -49,16 +40,11 @@ class HeuristicStrategy(BaseRankingStrategy):
             semantic_sim = semantic_scores[path]
 
             # Calculate the global quality scores
-            global_q, g_metrics, picture_rank_metrics = self._calculate_global_quality(item, semantic_sim)
-
-            face_q: float = 0.0
-            f_metrics: Dict[str, float] = {}
+            global_q, g_display_metrics = self._calculate_global_quality(item)
+            face_q, f_display_metrics = 0.0, {}
 
             if target_name:
-                # Calculate the face quality score
-                face_q, f_metrics, face_rank_metrics = self._calculate_face_quality(item, target_name, pose)
-                picture_rank_metrics.has_face = True
-                picture_rank_metrics.face_metrics = [face_rank_metrics]
+                face_q, f_display_metrics = self._calculate_face_quality(item, target_name, pose)
 
             w = self.WEIGHTS
 
@@ -69,22 +55,49 @@ class HeuristicStrategy(BaseRankingStrategy):
             if target_name:
                 final_score += (face_q * w["face_quality"])
 
-            metrics: Dict[str, Any] = {
+            display_metrics[path]: Dict[str, Any] = {
                 "final_relevance": round(final_score, 4),
                 "semantic": round(semantic_sim, 3),
-                **g_metrics,
-                **f_metrics
+                **g_display_metrics,
+                **f_display_metrics
             }
 
-            scored_items.append((item, final_score, metrics, picture_rank_metrics))
+            context = {"semantic_score": semantic_sim}
+            training_features[path] = FeatureExtractor.extract_from_result(
+                result=item,
+                context=context,
+                target_face_name=target_name
+            )
 
-        return scored_items
+            scored_items.append((item, final_score))
 
-    def _normalize(self, value: float, min_v: float, max_v: float) -> float:
+        scored_items.sort(key=lambda x: x[1], reverse=True)
+        ranked_results = [item for item, score in scored_items]
+
+        logger.info(f"Heuristic ranker scored {len(ranked_results)} candidates")
+
+        return RankingResult(
+            ranked_results=ranked_results,
+            display_metrics=display_metrics,
+            training_features=training_features
+        )
+
+    def _normalize(self, feature_name: str, value: float) -> float:
         """Linear normalization to 0.0 - 1.0"""
-        if value is None: return 0.0
-        if value < min_v: return 0.0
-        if value > max_v: return 1.0
+        if value is None:
+            return 0.0
+
+        bounds = get_normalization_bounds(feature_name)
+        if not bounds:
+            logger.warning(f"No normalization bounds for {feature_name}. Retuning 0.0")
+            return 0.0
+
+        min_v, max_v = bounds["min"], bounds["max"]
+
+        if value < min_v:
+            return 0.0
+        if value > max_v:
+            return 1.0
         return (value - min_v) / (max_v - min_v)
 
     def _calculate_iso_score(self, iso_val: Optional[int]) -> float:
@@ -97,36 +110,28 @@ class HeuristicStrategy(BaseRankingStrategy):
         if iso_val is None: return 0.5 # Neutral if unknown
         if iso_val <= 100: return 1.0
 
-        # Logarithmic normalization
-        # log2(100) ~ 6.64, log2(3200) ~ 11.64
-        min_log = math.log2(self.QUALITY_BOUNDS["iso"]["min"])
-        max_log = math.log2(self.QUALITY_BOUNDS["iso"]["max"])
-
+        bounds = get_normalization_bounds("g_iso")
+        min_log = math.log2(bounds["min"])
+        max_log = math.log2(bounds["max"])
         curr_log = math.log2(iso_val)
         norm = (curr_log - min_log) / (max_log - min_log)
 
-        # Invert because High ISO = Bad Quality
+        # Invert because high ISO = worse quality
         score = 1.0 - max(0.0, min(1.0, norm))
         return score
 
-    def _calculate_global_quality(self, item: ImageAnalysisResult, semantic_sim: float) -> Tuple[float, Dict[str, float], PictureRankMetrics]:
+    def _calculate_global_quality(self, item: ImageAnalysisResult) ->  Tuple[float, Dict[str, float]]:
         """
         Scores the technical quality of the whole image (Scenery, Composition, Noise).
         """
-        cfg = self.QUALITY_BOUNDS
+
         wts = self.WEIGHTS
 
         # 1. Aesthetics (The "Beauty" AI Score)
-        s_aes = self._normalize(item.aesthetic_score, cfg["aesthetic"]["min"], cfg["aesthetic"]["max"])
-
-        # 2. Global Sharpness
-        s_blur = self._normalize(item.global_blur, cfg["global_blur"]["min"], cfg["global_blur"]["max"])
-
-        # 3. Noise (ISO)
+        s_aes = self._normalize("aesthetic_score", item.aesthetic_score)
+        s_blur = self._normalize("g_blur", item.global_blur)
         s_iso = self._calculate_iso_score(item.iso)
-
-        # 4. Contrast (Dynamic Range)
-        s_con = self._normalize(item.global_contrast, cfg["contrast"]["min"], cfg["contrast"]["max"])
+        s_con = self._normalize("g_contrast", item.global_contrast)
 
         # Weighted Sum
         score = (
@@ -143,59 +148,48 @@ class HeuristicStrategy(BaseRankingStrategy):
             "g_contrast": round(s_con, 2),
             "global_score": round(score, 3)
         }
+        return score, metrics
 
-        year, month, date = parse_date_components(item.timestamp)
+    def _calculate_face_quality(
+            self,
+            item: ImageAnalysisResult,
+            target_name: str,
+            requested_pose: Optional[Pose] = None
+    ) -> Tuple[float, Dict[str, float]]:
+        """
+        Calculate face quality score for target person.
 
-        global_rank_metrics = PictureRankMetrics(
-            semantic_score=semantic_sim,
-            aesthetic_score=item.aesthetic_score,
-            g_blur=item.global_blur,
-            g_brightness=item.global_brightness,
-            g_contrast=item.global_contrast,
-            g_iso=item.iso,
-            year=year,
-            month=month,
-            date=date
-        )
+        Returns:
+            (combined_score, display_metrics_dict)
+        """
+        if not item.faces:
+            logger.error(f"Provided picture doesn't have any faces. Returning zeros")
+            return 0.0, {}
 
-        return score, metrics, global_rank_metrics
-
-    def _calculate_face_quality(self, item: ImageAnalysisResult, target_name: str, requested_pose: Optional[Pose] = None) -> Tuple[float, Dict[str, float], Optional[FaceRankMetrics]]:
-        if not item.faces: return 0.0, {}, None
-
-        # 1. Fast Lookup: Just find the first face matching the name
-        # We use next() to stop iterating immediately after finding the person
+        # Find target face by name
         target_face = next((f for f in item.faces if f.name.lower() == target_name.lower()), None)
 
         if not target_face:
-            return 0.0, {}, None
+            logger.error(f"No face found with name '{target_name}'. Returning zeros")
+            return 0.0, {}
 
-        cfg = self.QUALITY_BOUNDS
-
-        # 2. Correct Size Calculation (x2 - x1)
-        # Bbox is [x1, y1, x2, y2]
         if target_face.bbox and len(target_face.bbox) == 4:
             width_px = target_face.bbox[2] - target_face.bbox[0]
             height_px = target_face.bbox[3] - target_face.bbox[1]
         else:
             width_px, height_px = 0, 0
 
-        # 3. Score Calculations
-
-        # Blur (Laplacian Variance of the face crop)
-        s_blur = self._normalize(target_face.blur_score, cfg["face_blur"]["min"], cfg["face_blur"]["max"])
-
-        # Size (Resolution relative to our expectations)
-        h_score = self._normalize(height_px, cfg["face_size"]["min"], cfg["face_size"]["max"])
-        w_score = self._normalize(width_px, cfg["face_size"]["min"], cfg["face_size"]["max"])
+        # Normalize using registry bounds
+        s_blur = self._normalize("f_blur", target_face.blur_score)
+        h_score = self._normalize("f_height", height_px)
+        w_score = self._normalize("f_width", width_px)
         s_size = (h_score + w_score) / 2
-
-        # Orientation (Yaw/Pitch)
         s_orient = self._calculate_orientation_score(target_face, requested_pose)
 
-        # Weighted Sum
+        # Weighted combination
         score = (s_blur * 0.4) + (s_size * 0.3) + (s_orient * 0.3)
 
+        # Display metrics
         metrics = {
             "f_blur": round(s_blur, 2),
             "f_size": round(s_size, 2),
@@ -203,15 +197,7 @@ class HeuristicStrategy(BaseRankingStrategy):
             "f_score": round(score, 3)
         }
 
-        face_metrics = FaceRankMetrics(
-            f_height=height_px,
-            f_width=width_px,
-            f_orient_score=s_orient,
-            f_blur=target_face.blur_score,
-            f_conf=target_face.confidence
-        )
-
-        return score * target_face.confidence, metrics, face_metrics
+        return score * target_face.confidence, metrics
 
     def _calculate_orientation_score(self, target_face: FaceData, requested_pose: Optional[Pose]) -> float:
         """

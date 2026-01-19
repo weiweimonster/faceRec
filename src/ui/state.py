@@ -4,6 +4,7 @@ import uuid
 from dotenv import load_dotenv
 from main import DB_CHROMA_PATH, DB_SQL_PATH
 from src.db.storage import DatabaseManager
+from src.rank.base import RankingResult
 from src.retrieval.enginev2 import SearchEngine
 from src.util.image_util import load_face_crop_from_str
 from src.rag.gpt_client import GPTClient
@@ -42,12 +43,14 @@ def save_feedback_batch(db_manager: DatabaseManager):
     # 1. Get Selections
     selected_pairs = st.session_state.get("selected_pairs", set())
 
-    # 2. Get Rich History (Full Objects)
-    history_map = st.session_state.get("search_results_objects", {})
-    history_metrics = st.session_state.get("search_metrics_map", {})
-    history_photo_rank_metrics = st.session_state.get("search_photo_rank_metrics_map", {})
+    if not selected_pairs:
+        st.warning("No selections to save")
+        return
 
-    if not selected_pairs and not history_map:
+    # 2. Get Rich History (Full Objects)
+    history_rank_results = st.session_state.get("search_ranking_results", {})
+
+    if not selected_pairs and not history_rank_results:
         st.sidebar.warning("No data to save.")
         return
 
@@ -65,17 +68,15 @@ def save_feedback_batch(db_manager: DatabaseManager):
         for session_id, positive_set in selections_by_session.items():
 
             # This returns List[ImageAnalysisResult]
-            results_list = history_map.get(session_id, [])
-            metrics_map = history_metrics.get(session_id, {})
-            photo_rank_metrics_map = history_photo_rank_metrics.get(session_id, {})
+            ranking_results: RankingResult = history_rank_results.get(session_id, [])
             # logger.info(str(photo_rank_metrics_map))
 
-            if not results_list:
+            if not ranking_results:
                 continue
 
             # 1. FIND THE CUTOFF (Last Clicked Rank)
             max_index = -1
-            for idx, res in enumerate(results_list):
+            for idx, res in enumerate(ranking_results.ranked_results):
                 if res.photo_id in positive_set:
                     max_index = max(max_index, idx)
 
@@ -84,25 +85,16 @@ def save_feedback_batch(db_manager: DatabaseManager):
                 continue
 
             # 2. ADD BUFFER (e.g., +2 rows assumed seen)
-            cutoff_index = min(max_index + 3, len(results_list))
+            cutoff_index = min(max_index + 3, len(ranking_results.ranked_results))
             logger.info(f"Cutoff index for storing interaction is {cutoff_index}")
 
             # 3. SAVE VALID ZONE
             for i in range(cutoff_index):
-                res_obj = results_list[i]
+                res_obj = ranking_results.ranked_results[i]
 
                 label = 1 if res_obj.photo_id in positive_set else 0
-                specific_scores = metrics_map.get(res_obj.display_path, {})
-                specific_photo_rank_metrics = photo_rank_metrics_map.get(res_obj.display_path, {})
-                logger.info(str(specific_photo_rank_metrics))
-
-                db_manager.log_interaction_from_object(
-                    result=res_obj,
-                    session_id=session_id,
-                    label=label,
-                    dynamic_scores=specific_scores,
-                    rank_metrics=specific_photo_rank_metrics,
-                )
+                features = ranking_results.training_features.get(res_obj.display_path, {})
+                db_manager.log_interaction_from_features(res_obj, session_id, features, label)
 
                 if label == 1: count_pos += 1
                 else: count_neg += 1

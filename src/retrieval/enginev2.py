@@ -1,16 +1,14 @@
 from __future__ import annotations
 import clip
 import torch
-from typing import List, Dict, Any, Tuple, Optional
-
-from src.common.types import ImageAnalysisResult
+from typing import List
 from src.db.storage import DatabaseManager
-from src.util.search_config import SearchFilters, Pose
+from src.util.search_config import SearchFilters
 from src.util.logger import logger
 from src.rank.heuristic_ranker import HeuristicStrategy
 from src.rank.ranker import SearchResultRanker
 from src.rank.xgboost_ranker import XGBoostRanker
-from src.rank.rank_metrics import PictureRankMetrics
+from src.rank.base import RankingResult
 
 class SearchEngine:
     def __init__(self, db: DatabaseManager):
@@ -35,13 +33,14 @@ class SearchEngine:
         else:
             logger.error(f"Invalid strategy type: {strategy_type}, keeping current settings")
 
-    def searchv2(self, filters: SearchFilters, limit: int = 20, rank: bool = True) -> Tuple[List[ImageAnalysisResult], Dict[str, Any], Dict[str, Any]]:
+    def searchv2(self, filters: SearchFilters, limit: int = 20, rank: bool = True) -> RankingResult:
         """
         Search pipeline: SQL candidates -> CLIP Encoding -> Chroma Similarity -> Hydration -> Ranker.
         """
+
         if filters is None:
             logger.error("No filters found. Returning empty.")
-            return [], {}, {}
+            return RankingResult([], {}, {})
 
         # 1. SQL Candidate Filtering
         # Filters by People, Year, and Pose to narrow the search space
@@ -52,14 +51,14 @@ class SearchEngine:
         # If filters were provided but no candidates found, exit early
         if not candidate_paths and (filters.people or filters.pose or filters.year):
             logger.info("No candidates found matching SQL filters. Returning empty.")
-            return [], {}, {}
+            return RankingResult([], {}, {})
 
         # 2. Text Encoding (Logic resides in SearchEngine)
         if filters.semantic_query:
             query_vector = self._encode_text(filters.semantic_query)
         else:
             logger.error("No semantic query found. Returning empty.")
-            return [], {}, {}
+            return RankingResult([], {}, {})
 
         # 3. Vector Similarity Search
         # Note: get_semantic_candidates returns a Dict[path, score]
@@ -71,7 +70,7 @@ class SearchEngine:
         )
 
         if not semantic_data:
-            return [], {}, {}
+            return RankingResult([], {}, {})
 
         # 4. Metadata Hydration
         # We need the full ImageAnalysisResult objects for the Ranker to work
@@ -81,14 +80,7 @@ class SearchEngine:
         # Using your 'all' implementation
         hydrated_results = self.db.fetch_metadata_batch(ordered_paths, fields="all")
 
-        # 5. Smart Ranking & MMR Diversity
-        # We need to identify the target person for the 'Quality Boost' logic
-        target_person = filters.people[0] if (filters.people and len(filters.people) > 0) else None
-
-        logger.info(f"Initializing Ranker. Target person for quality boost: {target_person}")
-
         semantic_scores_only = {}
-
         # TODO: Move this into a private function
         for res in hydrated_results:
             if res.display_path in semantic_data:
@@ -100,16 +92,18 @@ class SearchEngine:
                 # B. INJECT VECTOR
                 res.semantic_vector = vector
 
-        # rank() returns (List[ImageAnalysisResult], self.metrics)
-        # It also internalizes the MMR logic we discussed
-        final_ranked_results, metrics, photo_rank_metrics = self.ranker.process(
+        # We need to identify the target person for the 'Quality Boost' logic
+        target_person = filters.people[0] if (filters.people and len(filters.people) > 0) else None
+
+        logger.info(f"Ranking with target_person={target_person}, pose={filters.pose}")
+        ranking_result = self.ranker.process(
             results=hydrated_results,
             semantic_scores=semantic_scores_only,
             target_name=target_person,
             lambda_param=0.7,
             top_k=limit,
-            pose=filters.pose,
+            pose=filters.pose
         )
 
-        logger.info(f"✅ Search complete. Returning top {len(final_ranked_results)} results.")
-        return final_ranked_results, metrics, photo_rank_metrics
+        logger.info(f"✅ Search complete. Returning {len(ranking_result.ranked_results)} results")
+        return ranking_result

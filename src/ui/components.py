@@ -2,8 +2,6 @@ import streamlit as st
 import os
 from typing import Dict, List, Any
 from src.common.types import ImageAnalysisResult, FaceData
-from src.util.image_util import load_face_crop
-from src.util.logger import logger
 
 def toggle_selection(photo_id: str, session_id: str):
     """
@@ -22,11 +20,22 @@ def toggle_selection(photo_id: str, session_id: str):
         st.session_state.selected_pairs.add(interaction_key)
 
 @st.fragment
-def render_photo_card(result: ImageAnalysisResult, metric: Dict[Any, Any] = None, context_label: str = "", show_raw: bool = False, session_id: str = "default"):
+def render_photo_card(
+        result: ImageAnalysisResult,
+        display_metrics: Dict[str, Any],
+        context_label: str = "",
+        show_raw: bool = False,
+        session_id: str = "default"
+):
     """
-    Renders a single photo card with a collapsible Inspector.
+    Render photo card with interactive selection and metrics display.
 
     Args:
+        result: ImageAnalysisResult to display
+        display_metrics: Normalized/weighted metrics for UI
+        context_label: Label like "#1" for rank display
+        show_raw: Whether to show detailed face analysis
+        session_id: Search session ID for click tracking
     """
     if not result:
         st.error("Results not found")
@@ -54,29 +63,27 @@ def render_photo_card(result: ImageAnalysisResult, metric: Dict[Any, Any] = None
     with st.expander(f"🔍 Technical Analysis {context_label}"):
 
         # --- SECTION A: RANKING METRICS ---
-        if metric:
+        if display_metrics:
             st.subheader("Ranking Breakdown")
             # Separate keys into groups to make them readable
-            semantic_keys = {"semantic", "mmr_rank", "final_relevance"}
-            # Everything else starting with 'g_' is global technical
-            global_tech = {k: v for k, v in metric.items() if k.startswith("g_")}
-            # Everything else starting with 'f_' is face technical
-            face_tech = {k: v for k, v in metric.items() if k.startswith("f_")}
+            semantic_keys = {"semantic", "mmr_rank", "final_relevance", "xgboost_score"}
+            global_metrics = {k: v for k, v in display_metrics.items() if k.startswith("g_")}
+            face_metrics = {k: v for k, v in display_metrics.items() if k.startswith("f_")}
 
             col1, col2 = st.columns(2)
             with col1:
                 st.caption("Relevance & Diversity")
                 for k in semantic_keys:
-                    if k in metric: st.write(f"**{k.replace('_', ' ').title()}:** {metric[k]}")
+                    if k in display_metrics: st.write(f"**{k.replace('_', ' ').title()}:** {display_metrics[k]}")
 
             with col2:
                 st.caption("Global Quality Scores")
-                for k, v in global_tech.items():
+                for k, v in global_metrics.items():
                     st.write(f"**{k[2:].title()}:** {v}") # Strips 'g_'
-            if face_tech:
+            if face_metrics:
                 st.caption("Normalized Face Scores (For Search Target)")
-                scols = st.columns(len(face_tech))
-                for idx, (sk, sv) in enumerate(face_tech.items()):
+                scols = st.columns(len(face_metrics))
+                for idx, (sk, sv) in enumerate(face_metrics.items()):
                     label = sk[2:].title()
                     with scols[idx]:
                         st.write(f"**{label}:** {sv:.2f}")
@@ -92,6 +99,7 @@ def render_photo_card(result: ImageAnalysisResult, metric: Dict[Any, Any] = None
                 fcol1, fcol2 = st.columns([1, 2])
 
                 with fcol1:
+                    from src.util.image_util import load_face_crop
                     cropped_face = load_face_crop(result.display_path, face.bbox)
                     if cropped_face:
                         st.image(cropped_face, width="stretch")

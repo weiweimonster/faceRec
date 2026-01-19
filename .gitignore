@@ -13,3 +13,8 @@ src/debug/
 logs/
 src/db/update*
 models/
+*.json
+hpsv2.py
+train_rank10.py
+xgboost_trainv2.py
+metrics.txt

@@ -1,12 +1,11 @@
 import torch
 import numpy as np
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Optional
 from src.common.types import ImageAnalysisResult
 from src.pose.pose import Pose
 from src.util.logger import logger
-from .base import BaseRankingStrategy
+from .base import BaseRankingStrategy, RankingResult
 from .heuristic_ranker import HeuristicStrategy
-from src.rank.rank_metrics import PictureRankMetrics
 
 class SearchResultRanker:
     def __init__(self, strategy: Optional[BaseRankingStrategy] = None):
@@ -26,44 +25,85 @@ class SearchResultRanker:
         lambda_param: float = 0.6,
         top_k: int = 50,
         pose: Optional[Pose] = None
-    ) -> Tuple[List[ImageAnalysisResult], Dict[str, Any], Optional[Dict[str, Any]]]:
+    ) -> RankingResult:
+        """
+        Apply strategy ranking + MMR diversity.
+
+        Args:
+            results: Candidate images to rank
+            semantic_scores: CLIP similarity scores
+            target_name: Person name for face quality boost
+            lambda_param: MMR balance (1.0=relevance only, 0.0=diversity only)
+            top_k: Number of results to return
+            pose: Pose filter
+
+        Returns:
+            RankingResult with diversified top-k results
+        """
 
         if not results:
-            logger.error(f"No results to rank. Returning empty list.")
-            return [], {}, None
+            logger.warning("No results to rank")
+            return RankingResult(
+                ranked_results=[],
+                display_metrics={},
+                training_features={}
+            )
 
-        scored_candidates = self.strategy.score_candidates(
+        ranking_result = self.strategy.score_candidates(
             results, semantic_scores, target_name, pose
         )
 
-        logger.info(f"Received {len(scored_candidates)} candidates from {self.strategy} ranker")
+        logger.info(f"{type(self.strategy).__name__} ranked {len(ranking_result.ranked_results)} candidates")
 
-        # Separate scores and metrics
-        items = [x[0] for x in scored_candidates] # Items
-        scores = [x[1] for x in scored_candidates] # Final score by the strategy
+        diversified_results = self._apply_mmr(
+            ranking_result.ranked_results,
+            lambda_param,
+            top_k,
+            ranking_result.display_metrics
+        )
 
-        # Create metrics dict: Path -> metric dict return by the strategy
-        all_metrics: Dict[str, Any] = {
-            x[0].display_path: x[2] for x in scored_candidates
+        top_k_paths = {r.display_path for r in diversified_results}
+
+        filtered_display_metrics = {
+            path: metrics
+            for path, metrics in ranking_result.display_metrics.items()
+            if path in top_k_paths
         }
 
-        photo_rank_metrics: Dict[str, Any] = {
-            x[0].display_path: x[3] for x in scored_candidates
+        filtered_training_features = {
+            path: features
+            for path, features in ranking_result.training_features.items()
+            if path in top_k_paths
         }
 
-        final_results = self._apply_mmr(items, scores, lambda_param, top_k, all_metrics)
-
-        return final_results, all_metrics, photo_rank_metrics
+        return RankingResult(
+            ranked_results=diversified_results,
+            display_metrics=filtered_display_metrics,
+            training_features=filtered_training_features
+        )
 
     def _apply_mmr(
         self,
         items: List[ImageAnalysisResult],
-        scores_list: List[float],
         lambda_param: float,
         top_k: int,
-        metric_store: Dict[str, Any]
+        display_metrics: Dict[str, Dict[str, Any]]
     ) -> List[ImageAnalysisResult]:
+        """
+        Maximal Marginal Relevance for diversity.
 
+        Balances relevance (from strategy ranking) with diversity
+        (semantic dissimilarity to already-selected results).
+
+        Args:
+            items: Pre-ranked results from strategy
+            lambda_param: Relevance vs diversity weight
+            top_k: Number to select
+            display_metrics: Metrics dict (modified in-place to add mmr_rank)
+
+        Returns:
+            Diversified list of top-k results
+        """
         num_candidates = len(items)
         if num_candidates == 0:
             logger.error(f"No results to rank. Returning empty list.")
@@ -74,12 +114,30 @@ class SearchResultRanker:
         embeddings = np.array([c.semantic_vector for c in items])
         c_tensor = torch.tensor(embeddings, dtype=torch.float32, device=self.device)
 
-        scores = torch.tensor(scores_list, dtype=torch.float32, device=self.device)
+        scores = []
+        for item in items:
+            metrics = display_metrics.get(item.display_path, {})
+
+            # Try different score keys depending on strategy
+            score = (
+                    metrics.get("final_relevance") or  # Heuristic ranker
+                    metrics.get("xgboost_score") or  # XGBoost ranker
+                    0.0  # Fallback
+            )
+            scores.append(score)
+
+        scores = np.array(scores, dtype=np.float32)
+        scores_tensor = torch.tensor(scores, dtype=torch.float32, device=self.device)
 
         if num_candidates > 1:
-            s_min, s_max = torch.min(scores), torch.max(scores)
+            s_min, s_max = torch.min(scores_tensor), torch.max(scores_tensor)
             if s_max > s_min:
-                scores = (scores - s_min) / (s_max - s_min)
+                scores_tensor = (scores_tensor - s_min) / (s_max - s_min)
+                logger.info(f"Normalized score before MMR ranking. Top score: {scores_tensor.max().item()}, Min: score {scores_tensor.min().item()}")
+            else:
+                # All scores are identical - fall back to rank position
+                logger.warning("All relevance scores identical, using rank position")
+                scores_tensor = torch.linspace(1.0, 0.0, num_candidates, device=self.device)
 
         # Similarity Matrix
         c_norm = torch.nn.functional.normalize(c_tensor, p=2, dim=1)
@@ -92,7 +150,7 @@ class SearchResultRanker:
         logger.info(f"Starting MMR Loop to select top {top_k} candidates")
         for i in range(min(top_k, num_candidates)):
             # Calculate MMR values for all candidates
-            mmr_vals = (lambda_param * scores) - ((1 - lambda_param) * max_sim_to_selected)
+            mmr_vals = (lambda_param * scores_tensor) - ((1 - lambda_param) * max_sim_to_selected)
 
             # Mask out already selected
             mmr_vals[~candidate_mask] = -float('inf')
@@ -107,7 +165,8 @@ class SearchResultRanker:
 
             # Update Metrics with Rank
             item_path = items[best_idx].display_path
-            if item_path in metric_store:
-                metric_store[item_path]["mmr_rank"] = i + 1
+            if item_path in display_metrics:
+                display_metrics[item_path]["mmr_rank"] = i + 1
 
+        logger.info(f"MMR selected {len(selected_indices)} diverse results")
         return [items[i] for i in selected_indices]

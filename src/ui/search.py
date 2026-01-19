@@ -39,30 +39,24 @@ def render_search_page(mode="search", show_raw=False):
                     st.json(search_filter.to_dict())
 
         # 2. Execution
-        results, metrics, photo_rank_metrics = engine.searchv2(search_filter, limit=100)
-        st.markdown(f"**Found {len(results)} results for:** `{query}`")
+        ranking_result = engine.searchv2(search_filter, limit=100)
+        st.markdown(f"**Found {len(ranking_result.ranked_results)} results for:** `{query}`")
 
         # 3. Store History (for LTR)
-        if "search_results_objects" not in st.session_state:
-            st.session_state.search_results_objects = {}
-        st.session_state.search_results_objects[current_sess_id] = results
-
-        if "search_metrics_map" not in st.session_state:
-            st.session_state.search_metrics_map = {}
-        st.session_state.search_metrics_map[current_sess_id] = metrics
-
-        if "search_photo_rank_metrics_map" not in st.session_state:
-            st.session_state.search_photo_rank_metrics_map = {}
-        st.session_state.search_photo_rank_metrics_map[current_sess_id] = photo_rank_metrics
+        # Store in session state for click tracking
+        if "search_ranking_results" not in st.session_state:
+            st.session_state.search_ranking_results = {}
+        st.session_state.search_ranking_results[current_sess_id] = ranking_result
 
         # 4. Render Grid
-        if results:
+        if ranking_result.ranked_results:
             cols = st.columns(3)
-            for i, res in enumerate(results):
-                metric = metrics[res.display_path]
+            for i, result in enumerate(ranking_result.ranked_results):
+                display_metrics = ranking_result.display_metrics.get(result.display_path, {})
                 with cols[i % 3]:
                     render_photo_card(
-                        res, metric,
+                        result,
+                        display_metrics,
                         context_label=f"#{i+1}",
                         show_raw=show_raw,
                         session_id=current_sess_id
