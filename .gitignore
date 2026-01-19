@@ -1,20 +1,38 @@
+# User data
 photos/
-.env
 .db/
 db/
+
+# Environment
+.env
 __pycache__/
-face_landmarker.task
-*.ipynb
 .idea/
-third_party/
-sac_logos_ava1-l14-linearMSE.pth
+
+# Notebooks and experiments
+*.ipynb
 delete_notebooks/
 src/debug/
 logs/
-src/db/update*
-models/
-*.json
 hpsv2.py
 train_rank10.py
 xgboost_trainv2.py
 metrics.txt
+
+# Model weights (large files - download separately)
+models/
+sac_logos_ava1-l14-linearMSE.pth
+face_landmarker.task
+
+# Third-party submodules (has its own repo)
+third_party/
+
+# Database migration scripts
+src/db/update*
+
+# IDE settings (keep .claude for project context)
+.idea/
+
+# Temporary/config files (but keep src/rank/models/*.json for XGBoost)
+*.pyc
+*.pyo
+.DS_Store
