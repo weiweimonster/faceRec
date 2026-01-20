@@ -37,4 +37,7 @@ src/db/update*
 *.pyo
 .DS_Store
 
+# Back up folder for database on a stable snapshot
+backups/
+
 ingestion_metrics.json
