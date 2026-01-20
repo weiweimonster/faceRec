@@ -33,7 +33,7 @@ class VisionScanner:
         try:
             self.model = Qwen2VLForConditionalGeneration.from_pretrained(
                 load_path,
-                torch_dtype=self.dtype,
+                dtype=self.dtype,
                 device_map="auto"
             )
             self.processor = AutoProcessor.from_pretrained(load_path)

@@ -33,10 +33,9 @@ class DatabaseManager:
         self.init_ltr_tables()
 
         # 2. Setup ChromaDB (Persistent)
-        # We explicitly set the tenant/db names if needed, but defaults work fine for local
         self.chroma_client = chromadb.PersistentClient(path=chroma_path)
 
-        # Get or create the collection.
+        # Get or create the collections.
         # "cosine" distance is CRITICAL for normalized CLIP embeddings.
         self.vector_collection = self.chroma_client.get_or_create_collection(
             name="photo_gallery",
@@ -147,7 +146,8 @@ class DatabaseManager:
                 global_blur REAL,
                 global_brightness REAL,
                 global_contrast REAL,
-                meta_tags TEXT -- JSON list of auto-generated tags
+                meta_tags TEXT, -- JSON list of auto-generated tags
+                caption_text TEXT -- Generated image caption
             )
         """)
 
@@ -186,6 +186,13 @@ class DatabaseManager:
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_person_id ON photo_faces(person_id);")
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON photos(timestamp);")
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_time_meta ON photos(month, time_period);")
+
+        # Migration: Add caption_text column to existing photos table
+        self.cursor.execute("PRAGMA table_info(photos)")
+        columns = [col[1] for col in self.cursor.fetchall()]
+        if 'caption_text' not in columns:
+            self.cursor.execute("ALTER TABLE photos ADD COLUMN caption_text TEXT")
+            logger.info("Migrated photos: added caption_text column")
 
         self.conn.commit()
     def log_search_query(self, session_id: str, query: str, filters: Any, ranking_model: str = "heuristic"):
@@ -297,15 +304,17 @@ class DatabaseManager:
                                 INSERT INTO photos (
                                     photo_id, original_path, display_path, file_hash,
                                     width, height, timestamp, month, time_period,
-                                    aesthetic_score, iso, global_blur, global_brightness, global_contrast
+                                    aesthetic_score, iso, global_blur, global_brightness, global_contrast,
+                                    caption_text
                                 )
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """, (
                                     photo_id, original_path, display_path, file_hash,
                                     result.original_width, result.original_height,
-                                    result.timestamp, result.month, result.time_period, # UPDATED
+                                    result.timestamp, result.month, result.time_period,
                                     result.aesthetic_score, result.iso, result.global_blur,
-                                    result.global_brightness, result.global_contrast
+                                    result.global_brightness, result.global_contrast,
+                                    result.caption
                                 ))
 
             # 2. Insert Face Records
@@ -346,11 +355,15 @@ class DatabaseManager:
                 metadatas=[metadata]
             )
 
-            self.caption_collection.add(
-                ids=[photo_id],
-                embeddings=[result.caption_vector],
-                metadatas=[metadata]
-            )
+            # Only add to caption collection if caption_vector exists
+            if result.caption_vector is not None:
+                self.caption_collection.add(
+                    ids=[photo_id],
+                    embeddings=[result.caption_vector],
+                    metadatas=[metadata]
+                )
+            else:
+                logger.warning(f"No caption vector for {photo_id}, skipping caption collection")
 
             self.conn.commit()
 
@@ -359,6 +372,113 @@ class DatabaseManager:
         except Exception as e:
             self.conn.rollback()
             logger.error(f"❌ Database Transaction Failed for {original_path}: {e}")
+            raise e
+
+    def save_result_batch(
+        self,
+        results: list,
+        original_paths: list,
+        display_paths: list,
+        file_hashes: list,
+    ) -> list:
+        """
+        Saves multiple analysis results to both databases in a single transaction.
+
+        More efficient than calling save_result() multiple times as it batches
+        the commits.
+
+        Args:
+            results: List of ImageAnalysisResult objects
+            original_paths: List of original file paths
+            display_paths: List of web-friendly paths
+            file_hashes: List of SHA-256 hashes
+
+        Returns:
+            List of generated photo_ids (UUIDs)
+        """
+        if len(results) != len(original_paths) != len(display_paths) != len(file_hashes):
+            raise ValueError("All input lists must have the same length")
+
+        photo_ids = []
+
+        try:
+            for result, original_path, display_path, file_hash in zip(
+                results, original_paths, display_paths, file_hashes
+            ):
+                photo_id = str(uuid.uuid4())
+                photo_ids.append(photo_id)
+
+                # 1. Insert Photo Record
+                self.cursor.execute("""
+                    INSERT INTO photos (
+                        photo_id, original_path, display_path, file_hash,
+                        width, height, timestamp, month, time_period,
+                        aesthetic_score, iso, global_blur, global_brightness, global_contrast,
+                        caption_text
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    photo_id, original_path, display_path, file_hash,
+                    result.original_width, result.original_height,
+                    result.timestamp, result.month, result.time_period,
+                    result.aesthetic_score, result.iso, result.global_blur,
+                    result.global_brightness, result.global_contrast,
+                    result.caption
+                ))
+
+                # 2. Insert Face Records
+                for face in (result.faces or []):
+                    emb_array = np.array(face.embedding, dtype=np.float32)
+                    emb_bytes = emb_array.tobytes()
+                    bbox_json = json.dumps(face.bbox)
+
+                    shot_type = face.shot_type if face.shot_type else "Unknown"
+                    blur_score = face.blur_score if face.blur_score else 0.0
+                    brightness = face.brightness if face.brightness else 0.0
+                    yaw = face.yaw if face.yaw else 0.0
+                    pitch = face.pitch if face.pitch else 0.0
+                    roll = face.roll if face.roll else 0.0
+                    pose = str(face.pose) if face.pose else "Unknown"
+
+                    self.cursor.execute("""
+                        INSERT INTO photo_faces (
+                            photo_id, person_id, embedding_blob, bounding_box, confidence,
+                            shot_type, blur_score, brightness, yaw, pitch, roll, pose
+                        )
+                        VALUES (?, -1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        photo_id, emb_bytes, bbox_json, face.confidence, shot_type,
+                        blur_score, brightness, yaw, pitch, roll, pose
+                    ))
+
+                # 3. Insert into ChromaDB
+                metadata = {
+                    "path": display_path,
+                    "face_count": len(result.faces) if result.faces else 0
+                }
+
+                self.vector_collection.add(
+                    ids=[photo_id],
+                    embeddings=[result.semantic_vector.tolist()],
+                    metadatas=[metadata]
+                )
+
+                if result.caption_vector is not None:
+                    self.caption_collection.add(
+                        ids=[photo_id],
+                        embeddings=[result.caption_vector],
+                        metadatas=[metadata]
+                    )
+
+            # Single commit for entire batch
+            self.conn.commit()
+            logger.info(f"✅ Batch saved {len(photo_ids)} photos to database")
+
+            return photo_ids
+
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Batch save failed: {e}")
             raise e
 
     def get_person_name(self, person_id: int) -> str:
@@ -378,7 +498,11 @@ class DatabaseManager:
 
     def close(self):
         self.conn.close()
-        # Chroma client handles its own cleanup typically
+        # Release ChromaDB resources
+        if hasattr(self, 'chroma_client') and self.chroma_client:
+            self.vector_collection = None
+            self.caption_collection = None
+            self.chroma_client = None
 
     def get_candidate_path(self, filters: SearchFilters) -> List[str]:
         params = []
@@ -524,6 +648,7 @@ class DatabaseManager:
             "global_contrast": "ph.global_contrast",
             "month": "ph.month",
             "time_period": "ph.time_period",
+            "caption_text": "ph.caption_text",
         }
 
         # Handle the "all" logic
@@ -577,6 +702,7 @@ class DatabaseManager:
                     global_contrast=row_dict.get('global_contrast'),
                     time_period=row_dict.get('time_period'),
                     month=row_dict.get('month'),
+                    caption=row_dict.get('caption_text') or "",
                     faces=[]
                 )
             # 4. Extract Face Data (only if confidence exists, meaning a face was joined)

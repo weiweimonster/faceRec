@@ -87,6 +87,111 @@ OPENAI_API_KEY=your_openai_api_key_here
 streamlit run appv2.py
 ```
 
+### Ingestion Pipeline
+
+Process photos and save embeddings to the database:
+
+```bash
+# Default: parallel processing (batch_size=16)
+python main.py ingest
+
+# Sequential processing (batch_size=1)
+python main.py ingest --sequential
+
+# Custom batch size
+python main.py ingest --batch-size 8
+python main.py ingest --batch-size 32
+
+# Legacy mode (original implementation, for comparison)
+python main.py ingest --legacy
+```
+
+### Verification Workflow
+
+Verify that the pipeline produces correct results by comparing against a golden dataset.
+
+**Step 1: Capture Golden Dataset (run BEFORE any refactoring)**
+
+```bash
+# Capture 300 images using the original implementation
+python main.py capture-golden --count 300
+
+# Custom count
+python main.py capture-golden --count 500
+```
+
+This creates `golden_dataset.json` containing all outputs from the original implementation.
+
+**Step 2: Run Verification (run AFTER changes)**
+
+```bash
+# Quick verification (50 images)
+python main.py verify --sample 50
+
+# Standard verification (100 images)
+python main.py verify --sample 100
+
+# Thorough verification (200 images max)
+python main.py verify --sample 200
+```
+
+**Verification Options:**
+
+```bash
+# Custom batch size for experimentation
+python main.py verify --sample 50 --batch-size 8
+python main.py verify --sample 50 --batch-size 32
+
+# Different random seed (for different sample selection)
+python main.py verify --sample 50 --seed 123
+
+# Disable shuffling (take first N images in order)
+python main.py verify --sample 50 --no-shuffle
+```
+
+The verification compares all fields:
+- Image dimensions, timestamps, ISO
+- Global quality metrics (blur, brightness, contrast)
+- CLIP semantic vectors (768D)
+- Aesthetic scores
+- Captions and caption embeddings
+- Face data (bboxes, embeddings, pose, quality metrics)
+
+### Benchmarking
+
+Compare sequential vs parallel pipeline performance:
+
+```bash
+# Run benchmark with 100 images
+python main.py benchmark --sample 100
+
+# Custom sample size
+python main.py benchmark --sample 200
+```
+
+Outputs `benchmark_report.json` with timing comparisons and speedup metrics.
+
+### CLI Reference
+
+| Command | Description |
+|---------|-------------|
+| `ingest` | Process photos and save to database |
+| `cluster` | Run face clustering on ingested photos |
+| `verify` | Verify pipeline against golden dataset |
+| `benchmark` | Compare sequential vs parallel performance |
+| `capture-golden` | Capture golden dataset for verification |
+
+| Option | Applies To | Description |
+|--------|------------|-------------|
+| `--sequential` | ingest | Use batch_size=1 |
+| `--parallel` | ingest | Use batch_size=16 (default) |
+| `--legacy` | ingest | Use original implementation |
+| `--batch-size N` | ingest, verify | Override batch size |
+| `--sample N` | verify, benchmark | Number of images to process |
+| `--count N` | capture-golden | Number of images to capture |
+| `--seed N` | verify | Random seed for shuffling (default: 42) |
+| `--no-shuffle` | verify | Disable random shuffling |
+
 ### Training the Ranking Model
 
 ```bash
