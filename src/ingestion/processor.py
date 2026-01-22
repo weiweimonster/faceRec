@@ -21,7 +21,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 class FeatureExtractor:
     """
-    The brain of the ingestion pipeline
+    DEPRECATED: This class is kept for backward compatibility and golden dataset capture.
+    Use the new pipeline-based architecture instead (src/ingestion/stages/).
+
+    The original monolithic ingestion processor that handles all feature extraction
+    in a single pass. Replaced by the modular stage-based pipeline for better
+    batching and GPU utilization.
     """
 
     def __init__(self, use_gpu: bool = True):

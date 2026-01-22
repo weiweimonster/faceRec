@@ -359,9 +359,12 @@ def capture_golden_dataset(
     use_gpu: bool = True,
 ) -> None:
     """
-    Capture a golden dataset from the CURRENT (pre-refactor) implementation.
+    DEPRECATED: This function uses the old FeatureExtractor class.
+    Kept for capturing baseline datasets using the original implementation.
 
-    Run this BEFORE refactoring to create the comparison baseline.
+    Capture a golden dataset from the original (pre-refactor) implementation.
+    Uses the deprecated FeatureExtractor class to ensure consistency with
+    previously captured golden datasets.
 
     Args:
         output_path: Path to save golden dataset

@@ -1,13 +1,8 @@
 import os
 import argparse
-from tqdm import tqdm
 from typing import List
 from src.db.storage import DatabaseManager
-from src.ingestion.processor import FeatureExtractor
-from src.ingestion.format_handler import ensure_display_version
-from src.ingestion.metrics_tracker import IngestionMetricsTracker
 from src.clustering.service import ClusteringService
-from src.util.image_util import calculate_image_hash
 from src.util.logger import logger
 
 RAW_PHOTOS_DIR = "./photos"
@@ -22,7 +17,7 @@ def run_ingestion(mode: str = "parallel", batch_size: int = None) -> None:
     and saves the embeddings in the database.
 
     Args:
-        mode: "parallel" (batch_size=16), "sequential" (batch_size=1), or "legacy" (original code)
+        mode: "parallel" (batch_size=16) or "sequential" (batch_size=1)
         batch_size: Override batch size (if None, uses mode-based default)
     """
     logger.info(f"Starting Ingestion Pipeline (mode={mode}, batch_size={batch_size})...")
@@ -39,51 +34,15 @@ def run_ingestion(mode: str = "parallel", batch_size: int = None) -> None:
 
     logger.info(f"Found {len(all_files)} photos.")
 
-    if mode == "legacy":
-        # Original sequential implementation
-        _run_legacy_ingestion(db, all_files)
-    else:
-        # New pipeline-based implementation
-        _run_pipeline_ingestion(db, all_files, mode, batch_size)
+    _run_pipeline_ingestion(db, all_files, mode, batch_size)
 
     db.close()
     logger.info("Ingestion Complete.")
 
 
-def _run_legacy_ingestion(db: DatabaseManager, all_files: List[str]) -> None:
-    """Original sequential ingestion code (preserved for comparison)."""
-    engine = FeatureExtractor(use_gpu=True)
-    tracker = IngestionMetricsTracker()
-
-    for raw_path in tqdm(all_files, desc="Ingesting"):
-        try:
-            img_hash = calculate_image_hash(raw_path)
-        except Exception as e:
-            logger.error(f"Error calculating hash for {raw_path}: {e}. Skipping.")
-            continue
-        try:
-            if db.photo_exists(img_hash):
-                logger.warning(f"Skipping duplicate: {raw_path}")
-                continue
-
-            display_path = ensure_display_version(raw_path, CACHE_DIR)
-            result = engine.process_image(display_path, raw_path)
-
-            if result:
-                db.save_result(result, raw_path, display_path, img_hash)
-                tracker.update(result)
-            else:
-                logger.warning(f"Skipping invalid file: {raw_path}")
-        except Exception as e:
-            logger.error(f"Error processing {raw_path}: {e}")
-
-    tracker.finalize_report("ingestion_metrics.json")
-
-
 def _run_pipeline_ingestion(db: DatabaseManager, all_files: List[str], mode: str, batch_size: int = None) -> None:
     """New pipeline-based ingestion."""
     from src.ingestion.pipeline import create_default_pipeline
-    from src.ingestion.metrics_tracker import IngestionMetricsTracker
 
     # Determine batch size: explicit > mode-based default
     if batch_size is None:
@@ -246,11 +205,6 @@ if __name__ == "__main__":
         help="Use parallel processing (batch_size=16) for ingest mode."
     )
     parser.add_argument(
-        "--legacy",
-        action="store_true",
-        help="Use legacy (original) ingestion code for comparison."
-    )
-    parser.add_argument(
         "--sample",
         type=int,
         default=100,
@@ -283,9 +237,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.mode == "ingest":
-        if args.legacy:
-            run_ingestion(mode="legacy")
-        elif args.sequential:
+        if args.sequential:
             run_ingestion(mode="sequential", batch_size=args.batch_size)
         else:
             # Default to parallel

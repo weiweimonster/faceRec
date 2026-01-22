@@ -101,9 +101,6 @@ python main.py ingest --sequential
 # Custom batch size
 python main.py ingest --batch-size 8
 python main.py ingest --batch-size 32
-
-# Legacy mode (original implementation, for comparison)
-python main.py ingest --legacy
 ```
 
 ### Verification Workflow
@@ -185,7 +182,6 @@ Outputs `benchmark_report.json` with timing comparisons and speedup metrics.
 |--------|------------|-------------|
 | `--sequential` | ingest | Use batch_size=1 |
 | `--parallel` | ingest | Use batch_size=16 (default) |
-| `--legacy` | ingest | Use original implementation |
 | `--batch-size N` | ingest, verify, benchmark | Override batch size |
 | `--sample N` | verify, benchmark | Number of images to process |
 | `--count N` | capture-golden | Number of images to capture |
