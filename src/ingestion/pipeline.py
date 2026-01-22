@@ -20,6 +20,7 @@ from src.ingestion.stages import (
     AestheticScoreStage,
     CaptionGenerationStage,
     CaptionEmbeddingStage,
+    MetricsCollectionStage,
     PersistStage,
 )
 from src.db.storage import DatabaseManager
@@ -204,6 +205,8 @@ def create_default_pipeline(
     batch_size: int = 16,
     use_gpu: bool = True,
     cache_dir: str = "./photos/cache",
+    collect_metrics: bool = False,
+    metrics_output_path: str = "ingestion_metrics.json",
 ) -> Pipeline:
     """
     Create a pipeline with the default stage configuration.
@@ -213,6 +216,8 @@ def create_default_pipeline(
         batch_size: Batch size (1=sequential, >1=parallel)
         use_gpu: Whether to use GPU for model inference
         cache_dir: Directory for HEIC conversion cache
+        collect_metrics: Whether to collect and save ingestion metrics
+        metrics_output_path: Path to save metrics JSON (if collect_metrics=True)
 
     Returns:
         Configured Pipeline instance
@@ -229,7 +234,12 @@ def create_default_pipeline(
         AestheticScoreStage(use_gpu=use_gpu),
         CaptionGenerationStage(batch_size=min(batch_size, 8)),  # Qwen2-VL uses more VRAM
         CaptionEmbeddingStage(batch_size=min(batch_size * 2, 32)),  # E5 is lighter
-        PersistStage(db=db),
     ]
+
+    # Optional metrics collection (before persist to capture all data)
+    if collect_metrics:
+        stages.append(MetricsCollectionStage(output_path=metrics_output_path))
+
+    stages.append(PersistStage(db=db))
 
     return Pipeline(stages=stages, batch_size=batch_size)

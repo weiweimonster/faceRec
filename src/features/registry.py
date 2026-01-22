@@ -58,6 +58,13 @@ class FeatureDefinition:
     is_trainable: bool = True
     default_value: float = 0.0
 
+    # Metrics tracking (ingestion statistics)
+    track_in_metrics: bool = True
+
+    # UI display
+    show_in_ui: bool = True
+    ui_label: Optional[str] = None  # Human-readable label (defaults to name)
+
     # Documentation
     description: str = ""
 
@@ -120,6 +127,36 @@ FEATURE_REGISTRY: Dict[str, FeatureDefinition] = {
         description="Camera ISO sensitivity (lower = less noise, -1 = unknown)"
     ),
 
+    "g_width": FeatureDefinition(
+        name="g_width",
+        category=FeatureType.GLOBAL,
+        dtype=FeatureDataType.INT,
+        sql_column="original_width",
+        is_trainable=False,
+        default_value=0.0,
+        description="Original image width in pixels"
+    ),
+
+    "g_height": FeatureDefinition(
+        name="g_height",
+        category=FeatureType.GLOBAL,
+        dtype=FeatureDataType.INT,
+        sql_column="original_height",
+        is_trainable=False,
+        default_value=0.0,
+        description="Original image height in pixels"
+    ),
+
+    "face_count": FeatureDefinition(
+        name="face_count",
+        category=FeatureType.GLOBAL,
+        dtype=FeatureDataType.INT,
+        extractor=lambda result, ctx: len(result.faces) if result.faces else 0,
+        is_trainable=True,
+        default_value=0.0,
+        description="Number of detected faces in image"
+    ),
+
     # ==================== SEMANTIC FEATURES ====================
 
     "semantic_score": FeatureDefinition(
@@ -128,6 +165,8 @@ FEATURE_REGISTRY: Dict[str, FeatureDefinition] = {
         dtype=FeatureDataType.FLOAT,
         extractor=lambda result, ctx: ctx.get("semantic_score", 0.0),
         is_trainable=True,
+        track_in_metrics=False,  # Computed at query time
+        show_in_ui=False,  # Query-time only
         description="CLIP cosine similarity between query and image"
     ),
 
@@ -137,6 +176,8 @@ FEATURE_REGISTRY: Dict[str, FeatureDefinition] = {
         dtype=FeatureDataType.FLOAT,
         extractor=lambda result, ctx: ctx.get("caption_score", 0.0),
         is_trainable=True,
+        track_in_metrics=False,  # Computed at query time
+        show_in_ui=False,  # Query-time only
         description="E5 cosine similarity between query and caption embedding"
     ),
 
@@ -145,7 +186,9 @@ FEATURE_REGISTRY: Dict[str, FeatureDefinition] = {
         category=FeatureType.COMPUTED,
         dtype=FeatureDataType.INT,
         extractor=lambda result, ctx: ctx.get("mmr_rank", -1),
-        is_trainable=False,  # Computed AFTER ranking, not an input feature
+        is_trainable=False,
+        track_in_metrics=False,  # Computed after ranking
+        show_in_ui=False,  # Internal ranking metric
         default_value=-1.0,
         description="Position in MMR-diversified results (1 = top result)"
     ),
@@ -156,6 +199,8 @@ FEATURE_REGISTRY: Dict[str, FeatureDefinition] = {
         dtype=FeatureDataType.FLOAT,
         extractor=lambda result, ctx: ctx.get("final_relevance", 0.0),
         is_trainable=False,
+        track_in_metrics=False,  # Computed after ranking
+        show_in_ui=False,  # Internal ranking metric
         description="Combined weighted score from ranking strategy"
     ),
 
@@ -173,6 +218,7 @@ FEATURE_REGISTRY: Dict[str, FeatureDefinition] = {
         normalization={"min": 30, "max": 1200},
         is_trainable=True,
         default_value=-1.0,
+        ui_label="Blur Score",
         description="Laplacian variance of face crop (-1 = no face)"
     ),
 
@@ -187,6 +233,7 @@ FEATURE_REGISTRY: Dict[str, FeatureDefinition] = {
         ),
         is_trainable=True,
         default_value=0.0,
+        ui_label="Confidence",
         description="Face detection confidence [0-1]"
     ),
 
@@ -197,6 +244,7 @@ FEATURE_REGISTRY: Dict[str, FeatureDefinition] = {
         extractor=lambda result, ctx: 0.0,  # TODO: Implement pose scoring
         is_trainable=True,
         default_value=0.0,
+        show_in_ui=False,  # Not implemented yet
         description="Pose alignment score [0-1] (1 = perfect frontal)"
     ),
 
@@ -212,6 +260,7 @@ FEATURE_REGISTRY: Dict[str, FeatureDefinition] = {
         normalization={"min": 50, "max": 550},
         is_trainable=True,
         default_value=0.0,
+        ui_label="Width (px)",
         description="Face bounding box width in pixels"
     ),
 
@@ -227,6 +276,7 @@ FEATURE_REGISTRY: Dict[str, FeatureDefinition] = {
         normalization={"min": 50, "max": 550},
         is_trainable=True,
         default_value=0.0,
+        ui_label="Height (px)",
         description="Face bounding box height in pixels"
     ),
 
@@ -241,6 +291,7 @@ FEATURE_REGISTRY: Dict[str, FeatureDefinition] = {
         ),
         is_trainable=True,
         default_value=0.0,
+        ui_label="Yaw",
         description="Head rotation left/right in degrees [-90, 90]"
     ),
 
@@ -255,6 +306,7 @@ FEATURE_REGISTRY: Dict[str, FeatureDefinition] = {
         ),
         is_trainable=True,
         default_value=0.0,
+        ui_label="Pitch",
         description="Head rotation up/down in degrees [-90, 90]"
     ),
 
@@ -269,6 +321,7 @@ FEATURE_REGISTRY: Dict[str, FeatureDefinition] = {
         ),
         is_trainable=True,
         default_value=0.0,
+        ui_label="Roll",
         description="Head tilt in degrees [-180, 180]"
     ),
 
@@ -433,6 +486,13 @@ def get_trainable_features() -> List[str]:
     """
     return [name for name, feat in FEATURE_REGISTRY.items() if feat.is_trainable]
 
+def get_trackable_features() -> List[str]:
+    """
+    Get list of feature names to track in ingestion metrics.
+    Excludes query-time and ranking-time computed features.
+    """
+    return [name for name, feat in FEATURE_REGISTRY.items() if feat.track_in_metrics]
+
 def get_features_by_category(category: FeatureType) -> Dict[str, FeatureDefinition]:
     """Get all features in a specific category"""
     return {name: feat for name, feat in FEATURE_REGISTRY.items() if feat.category == category}
@@ -450,4 +510,103 @@ def get_normalization_bounds(feature_name: str) -> Optional[Dict[str, float]]:
 def get_feature_names() -> List[str]:
     """Get all registered feature names"""
     return list(FEATURE_REGISTRY.keys())
+
+def get_ui_displayable_features(category: Optional[FeatureType] = None) -> List[FeatureDefinition]:
+    """
+    Get features that should be displayed in UI.
+
+    Args:
+        category: Optional filter by category (e.g., FeatureType.FACE)
+
+    Returns:
+        List of FeatureDefinitions with show_in_ui=True
+    """
+    features = [
+        feat for feat in FEATURE_REGISTRY.values()
+        if feat.show_in_ui
+    ]
+    if category:
+        features = [f for f in features if f.category == category]
+    return features
+
+def extract_ui_display_values(
+    result,
+    category: Optional[FeatureType] = None,
+    context: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Extract feature values for UI display from a result object.
+
+    Args:
+        result: ImageAnalysisResult object
+        category: Optional filter by category
+        context: Optional context dict for extractor functions
+
+    Returns:
+        Dict of {ui_label: value} for display
+    """
+    context = context or {}
+    display_values = {}
+
+    for feat in get_ui_displayable_features(category):
+        try:
+            # Extract value
+            if feat.sql_column:
+                value = getattr(result, feat.sql_column, None)
+            elif feat.extractor:
+                value = feat.extractor(result, context)
+            else:
+                continue
+
+            if value is None:
+                continue
+
+            # Use ui_label if provided, otherwise format the name
+            label = feat.ui_label or feat.name.replace("_", " ").title()
+            display_values[label] = value
+
+        except (AttributeError, TypeError):
+            continue
+
+    return display_values
+
+
+def extract_face_display_values(face) -> Dict[str, Any]:
+    """
+    Extract feature values for UI display from a FaceData object.
+
+    This directly accesses FaceData attributes rather than using extractors
+    (which expect ImageAnalysisResult).
+
+    Args:
+        face: FaceData object
+
+    Returns:
+        Dict of {ui_label: value} for display
+    """
+    # Mapping of FaceData attributes to display labels
+    FACE_DISPLAY_FIELDS = [
+        ("confidence", "Confidence"),
+        ("blur_score", "Blur Score"),
+        ("brightness", "Brightness"),
+        ("yaw", "Yaw"),
+        ("pitch", "Pitch"),
+        ("roll", "Roll"),
+        ("shot_type", "Shot Type"),
+    ]
+
+    display_values = {}
+
+    # Add bbox dimensions if available
+    if face.bbox and len(face.bbox) == 4:
+        display_values["Width (px)"] = face.bbox[2] - face.bbox[0]
+        display_values["Height (px)"] = face.bbox[3] - face.bbox[1]
+
+    # Add other fields
+    for attr, label in FACE_DISPLAY_FIELDS:
+        value = getattr(face, attr, None)
+        if value is not None:
+            display_values[label] = value
+
+    return display_values
 

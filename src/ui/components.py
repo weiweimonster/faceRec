@@ -2,6 +2,7 @@ import streamlit as st
 import os
 from typing import Dict, List, Any
 from src.common.types import ImageAnalysisResult, FaceData
+from src.features.registry import extract_face_display_values
 
 def toggle_selection(photo_id: str, session_id: str, position: int = -1):
     """
@@ -108,15 +109,15 @@ def render_photo_card(
 
                 with fcol2:
                     st.markdown(f"**{face.name or f'Unknown {i+1}'}**")
-                    # Use the .metrics property we added to FaceData for dynamic rendering!
-                    face_metrics = face.metrics
+                    # Use registry-based extraction for dynamic rendering
+                    face_metrics = extract_face_display_values(face)
 
                     # Group them into a readable string
                     summary = []
-                    for k, v in face_metrics.items():
+                    for label, v in face_metrics.items():
                         if v is not None:
                             val = f"{v:.2f}" if isinstance(v, float) else str(v)
-                            summary.append(f"• {k.replace('_', ' ').title()}: `{val}`")
+                            summary.append(f"• {label}: `{val}`")
 
                     st.markdown("<br>".join(summary), unsafe_allow_html=True)
                 st.write("") # Spacer

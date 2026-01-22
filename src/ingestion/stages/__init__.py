@@ -6,6 +6,7 @@ from src.ingestion.stages.clip_encoding import CLIPEncodingStage
 from src.ingestion.stages.aesthetic_score import AestheticScoreStage
 from src.ingestion.stages.caption_generation import CaptionGenerationStage
 from src.ingestion.stages.caption_embedding import CaptionEmbeddingStage
+from src.ingestion.stages.metrics_collection import MetricsCollectionStage
 from src.ingestion.stages.persist import PersistStage
 
 __all__ = [
@@ -18,5 +19,6 @@ __all__ = [
     "AestheticScoreStage",
     "CaptionGenerationStage",
     "CaptionEmbeddingStage",
+    "MetricsCollectionStage",
     "PersistStage",
 ]

@@ -183,6 +183,7 @@ Outputs `benchmark_report.json` with timing comparisons and speedup metrics.
 | `--sequential` | ingest | Use batch_size=1 |
 | `--parallel` | ingest | Use batch_size=16 (default) |
 | `--batch-size N` | ingest, verify, benchmark | Override batch size |
+| `--collect-metrics` | ingest | Save feature statistics to ingestion_metrics.json |
 | `--sample N` | verify, benchmark | Number of images to process |
 | `--count N` | capture-golden | Number of images to capture |
 | `--seed N` | verify | Random seed for shuffling (default: 42) |

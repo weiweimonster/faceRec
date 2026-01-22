@@ -11,7 +11,7 @@ DB_SQL_PATH = ".db/sqlite/photos.db"
 DB_CHROMA_PATH = "./db/chroma"
 
 
-def run_ingestion(mode: str = "parallel", batch_size: int = None) -> None:
+def run_ingestion(mode: str = "parallel", batch_size: int = None, collect_metrics: bool = False) -> None:
     """
     Scans the raw_photos directory, processes image with AI models
     and saves the embeddings in the database.
@@ -19,8 +19,9 @@ def run_ingestion(mode: str = "parallel", batch_size: int = None) -> None:
     Args:
         mode: "parallel" (batch_size=16) or "sequential" (batch_size=1)
         batch_size: Override batch size (if None, uses mode-based default)
+        collect_metrics: Whether to collect and save ingestion metrics
     """
-    logger.info(f"Starting Ingestion Pipeline (mode={mode}, batch_size={batch_size})...")
+    logger.info(f"Starting Ingestion Pipeline (mode={mode}, batch_size={batch_size}, metrics={collect_metrics})...")
 
     # Initialize Database
     db = DatabaseManager(sql_path=DB_SQL_PATH, chroma_path=DB_CHROMA_PATH)
@@ -34,13 +35,13 @@ def run_ingestion(mode: str = "parallel", batch_size: int = None) -> None:
 
     logger.info(f"Found {len(all_files)} photos.")
 
-    _run_pipeline_ingestion(db, all_files, mode, batch_size)
+    _run_pipeline_ingestion(db, all_files, mode, batch_size, collect_metrics)
 
     db.close()
     logger.info("Ingestion Complete.")
 
 
-def _run_pipeline_ingestion(db: DatabaseManager, all_files: List[str], mode: str, batch_size: int = None) -> None:
+def _run_pipeline_ingestion(db: DatabaseManager, all_files: List[str], mode: str, batch_size: int = None, collect_metrics: bool = False) -> None:
     """New pipeline-based ingestion."""
     from src.ingestion.pipeline import create_default_pipeline
 
@@ -54,6 +55,7 @@ def _run_pipeline_ingestion(db: DatabaseManager, all_files: List[str], mode: str
         batch_size=batch_size,
         use_gpu=True,
         cache_dir=CACHE_DIR,
+        collect_metrics=collect_metrics,
     )
 
     try:
@@ -233,15 +235,20 @@ if __name__ == "__main__":
         default=None,
         help="Batch size for pipeline processing (default: 16 for parallel, 1 for sequential)."
     )
+    parser.add_argument(
+        "--collect-metrics",
+        action="store_true",
+        help="Collect and save ingestion metrics to ingestion_metrics.json"
+    )
 
     args = parser.parse_args()
 
     if args.mode == "ingest":
         if args.sequential:
-            run_ingestion(mode="sequential", batch_size=args.batch_size)
+            run_ingestion(mode="sequential", batch_size=args.batch_size, collect_metrics=args.collect_metrics)
         else:
             # Default to parallel
-            run_ingestion(mode="parallel", batch_size=args.batch_size)
+            run_ingestion(mode="parallel", batch_size=args.batch_size, collect_metrics=args.collect_metrics)
     elif args.mode == "cluster":
         run_clustering()
     elif args.mode == "benchmark":

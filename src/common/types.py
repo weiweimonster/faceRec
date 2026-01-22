@@ -1,12 +1,15 @@
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 import numpy as np
 from src.pose.pose import Pose
 
 @dataclass
 class FaceData:
     """
-    Structured data for storing a single face
+    Structured data for storing a single face.
+
+    For UI display, use extract_face_display_values() from src.features.registry.
+    For metrics tracking, use IngestionMetricsTracker with the feature registry.
     """
     bbox: Optional[List[int]] = None
     embedding: Optional[np.ndarray] = None
@@ -24,29 +27,14 @@ class FaceData:
     pitch: Optional[float] = None
     roll: Optional[float] = None
 
-    @property
-    def metrics(self) -> Dict[str, Any]:
-        data = {}
-        # Block specific non-metric fields
-        NON_METRIC_FIELDS = {"bbox", "embedding", "name"}
-
-        for key, value in vars(self).items():
-            if key.startswith("_") or key in NON_METRIC_FIELDS:
-                continue
-
-            data[key] = value
-
-        # Computed metrics
-        if self.bbox and len(self.bbox) == 4:
-            data["face_height_px"] = self.bbox[3] - self.bbox[1]
-            data["face_width_px"] = self.bbox[2] - self.bbox[0]
-
-        return data
 
 @dataclass
 class ImageAnalysisResult:
     """
-    The complete AI analysis of a photo
+    The complete AI analysis of a photo.
+
+    For UI display, use extract_ui_display_values() from src.features.registry.
+    For metrics tracking, use IngestionMetricsTracker with the feature registry.
     """
     # Essential keys (always loaded)
     original_path: Optional[str]
@@ -73,18 +61,3 @@ class ImageAnalysisResult:
 
     # Complex nested data
     faces: Optional[List[FaceData]] = None
-
-    @property
-    def metrics(self) -> Dict[str, Any]:
-        data = {}
-        NON_METRIC_FIELDS = {
-            "photo_id", "original_path", "display_path", "file_hash",
-            "faces", "semantic_vector", "meta_tags", "original_width", "original_height"
-        }
-
-        for key, value in vars(self).items():
-            if key.startswith("_") or key in NON_METRIC_FIELDS: continue
-
-            data[key] = value
-
-        return data

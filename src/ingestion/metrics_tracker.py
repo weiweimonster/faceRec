@@ -1,13 +1,27 @@
 import numpy as np
 import json
 from collections import defaultdict
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from src.common.types import ImageAnalysisResult
+from src.features.registry import (
+    get_trackable_features,
+    get_feature,
+    FeatureType,
+)
 from src.util.logger import logger
 
+
 class IngestionMetricsTracker:
+    """
+    Tracks statistics for features during ingestion.
+    Uses the feature registry to determine which features to track.
+    """
+
     def __init__(self):
-        # Stores lists of raw values (e.g., "iso": [100, 200, 800...])
+        # Get trackable features from registry
+        self.trackable_features = get_trackable_features()
+
+        # Stores lists of raw values (e.g., "aesthetic_score": [4.5, 5.2, ...])
         self.numeric_data: Dict[str, List[float]] = defaultdict(list)
 
         # Stores counts of missing fields
@@ -20,45 +34,64 @@ class IngestionMetricsTracker:
     def update(self, result: ImageAnalysisResult):
         """
         Ingests stats from a single photo analysis result.
-        Automatically discovers metrics from the data objects via their .metrics property.
+        Uses feature registry to extract values.
         """
         if not result:
-            logger.error(f"Result is empty. Skip tracking metrics")
+            logger.error("Result is empty. Skip tracking metrics")
             return
 
         self.total_photos += 1
 
-        # --- 1. Global Metrics ---
-        # Iterate over all exposed metrics (Strings, Ints, Floats, None)
-        for name, value in result.metrics.items():
-            self._track_metric(name, value)
-
-        # --- 2. Face Metrics ---
+        # Count faces
         if result.faces:
-            for face in result.faces:
-                self.total_faces += 1
+            self.total_faces += len(result.faces)
 
-                # Iterate over face metrics
-                for name, value in face.metrics.items():
-                    # Prefix face metrics to distinguish them from global ones
-                    # e.g., "blur_score" -> "face_blur_score"
-                    key = f"face_{name}" if not name.startswith("face_") else name
-                    self._track_metric(key, value)
+        # Extract and track each trackable feature
+        for feat_name in self.trackable_features:
+            feat_def = get_feature(feat_name)
+            if not feat_def:
+                continue
 
-    def _track_metric(self, name: str, value: Any):
+            value = self._extract_value(result, feat_def)
+            self._track_metric(feat_name, value)
+
+    def _extract_value(self, result: ImageAnalysisResult, feat_def) -> Optional[float]:
+        """
+        Extract feature value from result using the feature definition.
+
+        Args:
+            result: The image analysis result
+            feat_def: Feature definition from registry
+
+        Returns:
+            Extracted numeric value or None
+        """
+        try:
+            # Direct attribute access via sql_column
+            if feat_def.sql_column:
+                value = getattr(result, feat_def.sql_column, None)
+                return float(value) if value is not None else None
+
+            # Use extractor callable
+            if feat_def.extractor:
+                # Pass empty context for ingestion (no query-time data)
+                value = feat_def.extractor(result, {})
+                return float(value) if value is not None else None
+
+            return None
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.debug(f"Could not extract {feat_def.name}: {e}")
+            return None
+
+    def _track_metric(self, name: str, value: Optional[float]):
         """Helper to safely add numeric values or count missing ones."""
         if value is None:
             self.missing_counts[name] += 1
             return
-        # Check for Numeric Data (Statistics)
-        # We explicitly verify it's a number to avoid crashing on strings like "Medium-Shot"
+
+        # Validate it's a number (not bool)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
-            try:
-                self.numeric_data[name].append(float(value))
-            except (ValueError, TypeError):
-                # Should not happen given the isinstance check, but good safety
-                logger.error(f"Error tracking field: {name}")
-                pass
+            self.numeric_data[name].append(float(value))
 
     def finalize_report(self, output_path: str = "ingestion_metrics.json") -> Dict[str, Any]:
         """
