@@ -132,16 +132,17 @@ def run_clustering() -> None:
     db.close()
 
 
-def run_benchmark(sample_size: int = 100) -> None:
+def run_benchmark(sample_size: int = 100, batch_size: int = 16) -> None:
     """
     Run benchmark comparing sequential vs parallel ingestion.
 
     Args:
         sample_size: Number of images to test with
+        batch_size: Batch size for parallel mode (default: 16)
     """
     from src.ingestion.benchmark import BenchmarkRunner, BenchmarkReport
 
-    logger.info(f"Starting Benchmark (sample_size={sample_size})...")
+    logger.info(f"Starting Benchmark (sample_size={sample_size}, batch_size={batch_size})...")
 
     runner = BenchmarkRunner(
         photos_dir=RAW_PHOTOS_DIR,
@@ -152,7 +153,7 @@ def run_benchmark(sample_size: int = 100) -> None:
     try:
         results = runner.run_benchmark(
             sample_sizes=[sample_size],
-            parallel_batch_size=16,
+            parallel_batch_size=batch_size,
             seed=42,
         )
 
@@ -292,7 +293,8 @@ if __name__ == "__main__":
     elif args.mode == "cluster":
         run_clustering()
     elif args.mode == "benchmark":
-        run_benchmark(sample_size=args.sample)
+        batch_size = args.batch_size if args.batch_size else 16
+        run_benchmark(sample_size=args.sample, batch_size=batch_size)
     elif args.mode == "verify":
         sample = min(args.sample, 200)  # Max 200 for verify
         batch_size = args.batch_size if args.batch_size else 16

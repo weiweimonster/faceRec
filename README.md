@@ -186,7 +186,7 @@ Outputs `benchmark_report.json` with timing comparisons and speedup metrics.
 | `--sequential` | ingest | Use batch_size=1 |
 | `--parallel` | ingest | Use batch_size=16 (default) |
 | `--legacy` | ingest | Use original implementation |
-| `--batch-size N` | ingest, verify | Override batch size |
+| `--batch-size N` | ingest, verify, benchmark | Override batch size |
 | `--sample N` | verify, benchmark | Number of images to process |
 | `--count N` | capture-golden | Number of images to capture |
 | `--seed N` | verify | Random seed for shuffling (default: 42) |
