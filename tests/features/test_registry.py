@@ -20,9 +20,13 @@ from src.features.registry import (
     get_feature,
     get_all_features,
     get_trainable_features,
+    get_trackable_features,
     get_features_by_category,
     get_normalization_bounds,
     get_feature_names,
+    get_ui_displayable_features,
+    extract_ui_display_values,
+    extract_face_display_values,
     _extract_face_attr,
     _encode_time_period,
     _extract_year,
@@ -146,6 +150,63 @@ class TestFeatureDefinition:
         )
         assert feat.is_trainable is False
         assert feat.default_value == -1.0
+
+    def test_feature_definition_track_in_metrics_default(self):
+        """Test that track_in_metrics defaults to True"""
+        feat = FeatureDefinition(
+            name="test_feature",
+            category=FeatureType.GLOBAL,
+            dtype=FeatureDataType.FLOAT,
+        )
+        assert feat.track_in_metrics is True
+
+    def test_feature_definition_track_in_metrics_false(self):
+        """Test feature definition with track_in_metrics=False"""
+        feat = FeatureDefinition(
+            name="semantic_score",
+            category=FeatureType.SEMANTIC,
+            dtype=FeatureDataType.FLOAT,
+            track_in_metrics=False,
+        )
+        assert feat.track_in_metrics is False
+
+    def test_feature_definition_show_in_ui_default(self):
+        """Test that show_in_ui defaults to True"""
+        feat = FeatureDefinition(
+            name="test_feature",
+            category=FeatureType.GLOBAL,
+            dtype=FeatureDataType.FLOAT,
+        )
+        assert feat.show_in_ui is True
+
+    def test_feature_definition_show_in_ui_false(self):
+        """Test feature definition with show_in_ui=False"""
+        feat = FeatureDefinition(
+            name="internal_feature",
+            category=FeatureType.COMPUTED,
+            dtype=FeatureDataType.FLOAT,
+            show_in_ui=False,
+        )
+        assert feat.show_in_ui is False
+
+    def test_feature_definition_ui_label(self):
+        """Test feature definition with custom ui_label"""
+        feat = FeatureDefinition(
+            name="f_blur",
+            category=FeatureType.FACE,
+            dtype=FeatureDataType.FLOAT,
+            ui_label="Blur Score",
+        )
+        assert feat.ui_label == "Blur Score"
+
+    def test_feature_definition_ui_label_default_none(self):
+        """Test that ui_label defaults to None"""
+        feat = FeatureDefinition(
+            name="test_feature",
+            category=FeatureType.GLOBAL,
+            dtype=FeatureDataType.FLOAT,
+        )
+        assert feat.ui_label is None
 
 
 # ============================================
@@ -431,6 +492,46 @@ class TestRegistryAccessFunctions:
         assert "f_blur" in names
         assert "semantic_score" in names
 
+    def test_get_trackable_features(self):
+        """Test getting features that should be tracked in metrics"""
+        trackable = get_trackable_features()
+        assert isinstance(trackable, list)
+        # Features with track_in_metrics=True should be included
+        assert "aesthetic_score" in trackable
+        assert "g_blur" in trackable
+        assert "f_blur" in trackable
+        # Features with track_in_metrics=False should be excluded
+        assert "semantic_score" not in trackable
+        assert "caption_score" not in trackable
+        assert "mmr_rank" not in trackable
+        assert "final_relevance" not in trackable
+
+    def test_get_ui_displayable_features_all(self):
+        """Test getting all UI displayable features"""
+        displayable = get_ui_displayable_features()
+        assert isinstance(displayable, list)
+        assert len(displayable) > 0
+        # All returned features should have show_in_ui=True
+        for feat in displayable:
+            assert feat.show_in_ui is True
+
+    def test_get_ui_displayable_features_by_category(self):
+        """Test getting UI displayable features filtered by category"""
+        face_displayable = get_ui_displayable_features(category=FeatureType.FACE)
+        assert isinstance(face_displayable, list)
+        # All returned features should be FACE category
+        for feat in face_displayable:
+            assert feat.category == FeatureType.FACE
+            assert feat.show_in_ui is True
+
+    def test_get_ui_displayable_features_excludes_hidden(self):
+        """Test that UI displayable features excludes show_in_ui=False"""
+        displayable = get_ui_displayable_features()
+        displayable_names = [f.name for f in displayable]
+        # Features with show_in_ui=False should not be included
+        assert "semantic_score" not in displayable_names
+        assert "mmr_rank" not in displayable_names
+
 
 # ============================================
 # FEATURE_REGISTRY Tests
@@ -510,3 +611,124 @@ class TestFeatureRegistry:
         for name in expected:
             assert name in FEATURE_REGISTRY, f"Missing meta feature: {name}"
             assert FEATURE_REGISTRY[name].category == FeatureType.META
+
+    def test_new_global_features_exist(self):
+        """Test that new global features (g_width, g_height, face_count) are registered"""
+        assert "g_width" in FEATURE_REGISTRY
+        assert "g_height" in FEATURE_REGISTRY
+        assert "face_count" in FEATURE_REGISTRY
+        assert FEATURE_REGISTRY["g_width"].category == FeatureType.GLOBAL
+        assert FEATURE_REGISTRY["g_height"].category == FeatureType.GLOBAL
+        assert FEATURE_REGISTRY["face_count"].category == FeatureType.GLOBAL
+
+    def test_query_time_features_not_trackable(self):
+        """Test that query-time features have track_in_metrics=False"""
+        assert FEATURE_REGISTRY["semantic_score"].track_in_metrics is False
+        assert FEATURE_REGISTRY["caption_score"].track_in_metrics is False
+
+    def test_ranking_time_features_not_trackable(self):
+        """Test that ranking-time features have track_in_metrics=False"""
+        assert FEATURE_REGISTRY["mmr_rank"].track_in_metrics is False
+        assert FEATURE_REGISTRY["final_relevance"].track_in_metrics is False
+
+    def test_query_time_features_not_in_ui(self):
+        """Test that query-time features have show_in_ui=False"""
+        assert FEATURE_REGISTRY["semantic_score"].show_in_ui is False
+        assert FEATURE_REGISTRY["caption_score"].show_in_ui is False
+        assert FEATURE_REGISTRY["mmr_rank"].show_in_ui is False
+
+
+# ============================================
+# Extract Display Values Tests
+# ============================================
+
+class TestExtractFaceDisplayValues:
+    """Tests for the extract_face_display_values function"""
+
+    def test_extract_face_display_values_basic(self):
+        """Test extracting display values from a FaceData object"""
+        face = FaceData(
+            confidence=0.95,
+            blur_score=150.0,
+            brightness=120.0,
+            yaw=10.5,
+            pitch=-5.0,
+            roll=2.0,
+            shot_type="Medium-Shot",
+            bbox=[100, 100, 200, 250],
+        )
+        values = extract_face_display_values(face)
+        assert isinstance(values, dict)
+        assert values["Confidence"] == 0.95
+        assert values["Blur Score"] == 150.0
+        assert values["Brightness"] == 120.0
+        assert values["Yaw"] == 10.5
+        assert values["Pitch"] == -5.0
+        assert values["Roll"] == 2.0
+        assert values["Shot Type"] == "Medium-Shot"
+        assert values["Width (px)"] == 100  # 200 - 100
+        assert values["Height (px)"] == 150  # 250 - 100
+
+    def test_extract_face_display_values_partial(self):
+        """Test extracting display values when some fields are None"""
+        face = FaceData(
+            confidence=0.85,
+            blur_score=None,
+            brightness=100.0,
+        )
+        values = extract_face_display_values(face)
+        assert "Confidence" in values
+        assert "Blur Score" not in values  # None should be excluded
+        assert "Brightness" in values
+
+    def test_extract_face_display_values_no_bbox(self):
+        """Test extracting display values when bbox is None"""
+        face = FaceData(
+            confidence=0.9,
+            bbox=None,
+        )
+        values = extract_face_display_values(face)
+        assert "Width (px)" not in values
+        assert "Height (px)" not in values
+
+    def test_extract_face_display_values_empty_face(self):
+        """Test extracting display values from empty FaceData"""
+        face = FaceData()
+        values = extract_face_display_values(face)
+        assert isinstance(values, dict)
+        # Should have no values since everything is None
+        assert len(values) == 0
+
+
+class TestExtractUiDisplayValues:
+    """Tests for the extract_ui_display_values function"""
+
+    def test_extract_ui_display_values_basic(self):
+        """Test extracting display values from ImageAnalysisResult"""
+        result = ImageAnalysisResult(
+            original_path="/test/path.jpg",
+            photo_id="123",
+            display_path="/test/display.jpg",
+            aesthetic_score=5.2,
+            global_blur=150.0,
+            global_brightness=128.0,
+            global_contrast=45.0,
+            iso=400,
+        )
+        values = extract_ui_display_values(result)
+        assert isinstance(values, dict)
+        # Should contain values for displayable features
+        assert len(values) > 0
+
+    def test_extract_ui_display_values_with_category_filter(self):
+        """Test extracting display values filtered by category"""
+        result = ImageAnalysisResult(
+            original_path="/test/path.jpg",
+            photo_id="123",
+            display_path="/test/display.jpg",
+            aesthetic_score=5.2,
+            global_blur=150.0,
+        )
+        values = extract_ui_display_values(result, category=FeatureType.GLOBAL)
+        assert isinstance(values, dict)
+        # All returned values should be from GLOBAL features only
